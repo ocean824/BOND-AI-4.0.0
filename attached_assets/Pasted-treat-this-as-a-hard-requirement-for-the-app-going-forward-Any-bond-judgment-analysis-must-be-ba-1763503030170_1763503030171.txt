@@ -1,0 +1,302 @@
+treat this as a hard requirement for the app going forward:
+
+✅ Any bond/judgment analysis must be based on real bond data, never on mock / placeholder numbers.
+✅ If there isn’t enough real data, the app should say “no data / incomplete data,” not fabricate outputs.
+
+Since I don’t have the Replit-export zip yet, I’ll lay out exactly how the code should be structured so that when you upload it, I can check each piece and patch anything that violates this rule.
+
+1. Data source rule: no mock arrays, no “demo calculations”
+Runtime rule:
+Every analysis endpoint (e.g. /api/bonds/analyze, /api/judgments/:id/price) must:
+
+
+Pull its inputs from:
+
+
+The database (bond/judgment records you or your client loaded), and/or
+
+
+A real external data provider (e.g. bond pricing / market feed API configured via env vars), and/or
+
+
+User-submitted data in a request (CUSIP, ISIN, coupon, maturity, current price, etc.).
+
+
+
+
+Never fall back to hard-coded “sample” objects like:
+const mockBond = { cusip: '123456AB9', price: 100, ... };
+
+
+
+If required data is missing:
+
+
+Return a structured error: "Bond data not available" or "Missing price / yield / coupon to compute analytics".
+
+
+Do not compute or display anything based on guessed or random values.
+
+
+
+
+When you upload the Replit zip, I will:
+
+
+Search for any mock, sample, demo, or hard-coded bond objects in:
+
+
+server/services/*
+
+
+server/routes/*
+
+
+app/src/lib/*
+
+
+app/src/pages/*
+
+
+
+
+Remove those from runtime paths and confine them (if needed) to:
+
+
+Tests under tests/ or
+
+
+Seed scripts clearly marked dev-only.
+
+
+
+
+
+2. Real bond model & ingestion: what the DB must carry
+To analyze real bonds, your DB needs a proper bond schema. Conceptually, something like:
+// db/schema.ts
+export const bonds = pgTable('bonds', {
+  id: serial('id').primaryKey(),
+  cusip: varchar('cusip', { length: 12 }).notNull(),
+  isin: varchar('isin', { length: 12 }),
+  description: text('description'),
+  issuer: varchar('issuer', { length: 255 }),
+  couponRate: numeric('coupon_rate', { precision: 6, scale: 4 }),
+  couponFrequency: integer('coupon_frequency'), // e.g. 2 for semiannual
+  issueDate: date('issue_date'),
+  maturityDate: date('maturity_date'),
+  faceValue: numeric('face_value', { precision: 18, scale: 2 }).default('1000'),
+  currency: varchar('currency', { length: 3 }).default('USD'),
+  // market data snapshot (real, not mock)
+  lastPrice: numeric('last_price', { precision: 10, scale: 4 }),
+  lastYield: numeric('last_yield', { precision: 8, scale: 4 }),
+  lastPriceAsOf: timestamp('last_price_as_of', { withTimezone: true }),
+  source: varchar('source', { length: 64 }) // e.g. 'client_upload', 'provider_X'
+});
+
+In the final app:
+
+
+Bond creation / import must be from:
+
+
+Your manual research (CRIS, CUSIP lookups, docs, etc.) via an upload form or admin UI, or
+
+
+A connector that calls a real bond data provider using the CUSIP/ISIN.
+
+
+
+
+The analysis service must always query this bonds table (or its equivalent) to get real values.
+
+
+When I get the Replit zip, I’ll:
+
+
+Check the existing schema (you might already have a bonds or judgments table that holds bond-like fields).
+
+
+Patch schema + services so that analytics functions read only from these persisted fields, not from synthetic values.
+
+
+
+3. Bond analytics service: deterministic math, real inputs only
+You want the analysis to “fully function and actually work.” That means:
+
+
+Real inputs → Deterministic formulas → Stable outputs
+
+
+No randomness, no placeholders, no “fake discount rate” just to show a chart.
+
+
+Example of what a proper bondAnalyticsService.ts might look like:
+// server/services/bondAnalyticsService.ts
+import { bonds } from '../../db/schema.js';
+import { dbRead } from '../db/client.js';
+import { eq } from 'drizzle-orm';
+import { NotFoundError, ValidationError } from '../errors/index.js';
+
+export interface BondAnalytics {
+  price: number;
+  yieldToMaturity: number;
+  accruedInterest: number;
+  cleanPrice: number;
+  dirtyPrice: number;
+  macaulayDuration: number;
+  modifiedDuration: number;
+  convexity: number;
+}
+
+export async function analyzeBondByCusip(cusip: string): Promise<BondAnalytics> {
+  const [bond] = await dbRead
+    .select()
+    .from(bonds)
+    .where(eq(bonds.cusip, cusip));
+
+  if (!bond) {
+    throw new NotFoundError(`No bond found for CUSIP ${cusip}`);
+  }
+
+  if (!bond.lastPrice || !bond.couponRate || !bond.maturityDate || !bond.couponFrequency) {
+    throw new ValidationError('Bond is missing required fields for analytics');
+  }
+
+  // Here we assume all fields are real values, not mock.
+  const result = calculateBondAnalytics({
+    price: Number(bond.lastPrice),
+    couponRate: Number(bond.couponRate),
+    couponFrequency: bond.couponFrequency,
+    maturityDate: bond.maturityDate,
+    faceValue: Number(bond.faceValue ?? 1000)
+  });
+
+  return result;
+}
+
+Where calculateBondAnalytics is pure math based on real price / coupon / maturity. It never generates fake inputs if something’s missing — it just throws a proper error.
+When I see your actual implementation, I’ll ensure:
+
+
+No “fallback” like:
+const price = bond.lastPrice ?? 100; // ❌ fake default
+
+Instead: validation error if lastPrice is missing.
+
+
+
+4. External “real data” provider hookup (optional but powerful)
+If you want the app to pull live market data, the correct pattern is:
+
+
+Configure provider access in env:
+BOND_DATA_PROVIDER_URL=https://...
+BOND_DATA_API_KEY=...
+
+
+
+Add a service like:
+// server/services/bondDataProvider.ts
+import fetch from 'node-fetch';
+
+export async function fetchRealBondSnapshot(cusip: string) {
+  const res = await fetch(`${process.env.BOND_DATA_PROVIDER_URL}/bonds/${cusip}`, {
+    headers: {
+      Authorization: `Bearer ${process.env.BOND_DATA_API_KEY}`
+    }
+  });
+
+  if (!res.ok) {
+    throw new Error(`Provider error: ${res.status}`);
+  }
+
+  const data = await res.json();
+  // No mock: just normalize provider’s real data.
+  return {
+    price: data.price,
+    yieldToMaturity: data.yield,
+    // ...
+  };
+}
+
+
+
+Save those values in DB and feed them into the analytics engine.
+
+
+No random numbers, no canned examples.
+When I review the Replit code, I’ll:
+
+
+Confirm any provider hooks are just adapters around real API responses.
+
+
+Make sure nothing inside providers or analytics functions generates fake prices/yields “for demo.”
+
+
+
+5. What I’ll specifically enforce when you upload the zip
+When you send me the Replit export, I’ll:
+
+
+Scan for mock usage
+
+
+Any of these patterns will be removed from runtime paths:
+
+
+const mockBonds = [...]
+
+
+if (process.env.NODE_ENV !== 'production') return mockResult;
+
+
+Hard-coded “demo” values used in controllers.
+
+
+
+
+
+
+Verify all analysis is sourced from real fields
+
+
+For “bond analysis” routes, I’ll track data from:
+
+
+Incoming request → DB query / provider call → math → response.
+
+
+
+
+If any step shortcuts with synthetic values, I’ll rewrite it.
+
+
+
+
+Tighten error handling instead of faking
+
+
+If the code currently says “if missing coupon, assume 5%,” I’ll turn that into a validation error.
+
+
+
+
+Keep test data confined
+
+
+Tests can still use synthetic bonds inside tests/ so CI can run — but those will never leak into actual user-facing endpoints.
+
+
+
+
+
+If you want, the next step (before you export from Replit) is:
+
+
+Make sure in your current app you’re always entering real bond/judgment info (CUSIP, coupon, maturity, etc.) via the UI or seed script, not relying on sample items.
+
+
+Then export the zip, upload it here, and I’ll walk through every bond-analysis path and patch anything that conflicts with this “real data only” rule.
+

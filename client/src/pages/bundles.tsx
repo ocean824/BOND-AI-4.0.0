@@ -11,7 +11,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
-import { Package, Plus, FileText, DollarSign, Trash2 } from "lucide-react";
+import { Package, Plus, FileText, DollarSign, Trash2, Download } from "lucide-react";
 import type { Bundle, Judgment, BundleWithJudgments } from "@shared/schema";
 
 export default function BundlesPage() {
@@ -260,13 +260,56 @@ export default function BundlesPage() {
                       <CardTitle>{selectedBundle.name}</CardTitle>
                       <CardDescription>{selectedBundle.description || "No description"}</CardDescription>
                     </div>
-                    <Dialog open={addJudgmentDialogOpen} onOpenChange={setAddJudgmentDialogOpen}>
-                      <DialogTrigger asChild>
-                        <Button variant="outline" data-testid="button-add-judgment">
-                          <Plus className="w-4 h-4 mr-2" />
-                          Add Judgment
-                        </Button>
-                      </DialogTrigger>
+                    <div className="flex gap-2">
+                      <Button
+                        variant="outline"
+                        onClick={async () => {
+                          try {
+                            const token = localStorage.getItem("auth_token");
+                            const response = await fetch(`/api/teaser/${selectedBundle.id}`, {
+                              headers: {
+                                "Authorization": `Bearer ${token}`,
+                              },
+                            });
+
+                            if (!response.ok) {
+                              throw new Error("Failed to download PDF");
+                            }
+
+                            const blob = await response.blob();
+                            const url = window.URL.createObjectURL(blob);
+                            const a = document.createElement("a");
+                            a.href = url;
+                            a.download = `bundle-${selectedBundle.id}-teaser.pdf`;
+                            document.body.appendChild(a);
+                            a.click();
+                            window.URL.revokeObjectURL(url);
+                            document.body.removeChild(a);
+
+                            toast({
+                              title: "PDF Downloaded",
+                              description: "Investor teaser PDF has been downloaded successfully",
+                            });
+                          } catch (error) {
+                            toast({
+                              title: "Download Failed",
+                              description: "Failed to download teaser PDF",
+                              variant: "destructive",
+                            });
+                          }
+                        }}
+                        data-testid="button-download-teaser"
+                      >
+                        <Download className="w-4 h-4 mr-2" />
+                        Download Teaser
+                      </Button>
+                      <Dialog open={addJudgmentDialogOpen} onOpenChange={setAddJudgmentDialogOpen}>
+                        <DialogTrigger asChild>
+                          <Button variant="outline" data-testid="button-add-judgment">
+                            <Plus className="w-4 h-4 mr-2" />
+                            Add Judgment
+                          </Button>
+                        </DialogTrigger>
                       <DialogContent>
                         <DialogHeader>
                           <DialogTitle>Add Judgment to Bundle</DialogTitle>
@@ -315,6 +358,7 @@ export default function BundlesPage() {
                         </DialogFooter>
                       </DialogContent>
                     </Dialog>
+                  </div>
                   </div>
                 </CardHeader>
                 <CardContent>

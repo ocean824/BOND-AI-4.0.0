@@ -4,6 +4,7 @@ import { storage } from "./storage";
 import { authMiddleware, generateToken, type AuthRequest } from "./middleware/auth";
 import { extractJudgmentData, generateChatResponse } from "./services/aiExtractionService";
 import { buildMultiScenarioPricing } from "./services/pricingService";
+import { generateInvestorTeaserPDF } from "./services/pdfGenerationService";
 import bcrypt from "bcryptjs";
 import { z } from "zod";
 import { sql } from "drizzle-orm";
@@ -246,6 +247,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ error: "Bundle not found" });
       }
 
+      // Verify ownership
+      if (bundle.ownerId !== req.user!.id) {
+        return res.status(403).json({ error: "Forbidden - You do not have access to this bundle" });
+      }
+
       const bundleJudgmentsList = await storage.getBundleJudgments(bundleId);
       const judgmentsWithDetails = await Promise.all(
         bundleJudgmentsList.map(async (bj) => {
@@ -290,6 +296,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const bundleId = parseInt(req.params.id);
       const { judgmentId, tranche } = req.body;
 
+      // Verify bundle ownership before allowing modifications
+      const bundle = await storage.getBundle(bundleId);
+      if (!bundle) {
+        return res.status(404).json({ error: "Bundle not found" });
+      }
+      if (bundle.ownerId !== req.user!.id) {
+        return res.status(403).json({ error: "Forbidden - You do not have access to this bundle" });
+      }
+
       const bundleJudgment = await storage.addJudgmentToBundle({
         bundleId,
         judgmentId,
@@ -307,6 +322,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const bundleId = parseInt(req.params.id);
       const judgmentId = parseInt(req.params.judgmentId);
+
+      // Verify bundle ownership before allowing modifications
+      const bundle = await storage.getBundle(bundleId);
+      if (!bundle) {
+        return res.status(404).json({ error: "Bundle not found" });
+      }
+      if (bundle.ownerId !== req.user!.id) {
+        return res.status(403).json({ error: "Forbidden - You do not have access to this bundle" });
+      }
 
       await storage.removeJudgmentFromBundle(bundleId, judgmentId);
       res.json({ success: true });
@@ -429,6 +453,110 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Send chat message error:", error);
       res.status(500).json({ error: "Failed to send message" });
+    }
+  });
+
+  // ===== PDF GENERATION ROUTES =====
+  app.get("/api/teaser/:bundleId", authMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const bundleId = parseInt(req.params.bundleId);
+
+      // Fetch bundle
+      const bundle = await storage.getBundle(bundleId);
+      if (!bundle) {
+        return res.status(404).json({ error: "Bundle not found" });
+      }
+
+      // Verify ownership - prevent unauthorized access to other users' bundles
+      if (bundle.ownerId !== req.user!.id) {
+        return res.status(403).json({ error: "Forbidden - You do not have access to this bundle" });
+      }
+
+      // Fetch bundle judgments with details
+      const bundleJudgmentsList = await storage.getBundleJudgments(bundleId);
+      
+      // Fetch judgment details and price estimates
+      const judgmentDetails = await Promise.all(
+        bundleJudgmentsList.map(async (bj) => {
+          const judgment = await storage.getJudgment(bj.judgmentId);
+          const priceEstimates = await storage.getPriceEstimates(bj.judgmentId);
+          const basePrice = priceEstimates.find(pe => pe.scenarioName === "base");
+          
+          return {
+            judgment,
+            tranche: bj.tranche,
+            recommendedPrice: basePrice ? parseFloat(basePrice.recommendedPurchasePrice) : 0,
+          };
+        })
+      );
+
+      // Calculate tranche summaries (using actual stored keys: senior, mezz, equity)
+      const trancheMapping = [
+        { key: "senior", label: "Senior" },
+        { key: "mezz", label: "Mezzanine" },
+        { key: "equity", label: "Equity" },
+      ];
+      
+      const trancheSummaries = trancheMapping.map(({ key, label }) => {
+        const trancheJudgments = judgmentDetails.filter(jd => jd.tranche === key);
+        return {
+          tranche: label,
+          count: trancheJudgments.length,
+          totalFaceValue: trancheJudgments.reduce((sum, jd) => 
+            sum + parseFloat(jd.judgment?.judgmentAmount || "0"), 0),
+          totalRecommendedPrice: trancheJudgments.reduce((sum, jd) => 
+            sum + jd.recommendedPrice, 0),
+        };
+      });
+
+      // Calculate totals
+      const totalFaceValue = trancheSummaries.reduce((sum, t) => sum + t.totalFaceValue, 0);
+      const totalRecommendedPrice = trancheSummaries.reduce((sum, t) => sum + t.totalRecommendedPrice, 0);
+      const avgRecoveryRate = totalFaceValue > 0 ? (totalRecommendedPrice / totalFaceValue) * 100 : 0;
+
+      // Format judgment list with proper tranche labels
+      const trancheLabels: Record<string, string> = {
+        senior: "Senior",
+        mezz: "Mezzanine",
+        equity: "Equity",
+      };
+      
+      const judgments = judgmentDetails.map(jd => ({
+        debtorName: jd.judgment?.debtorName || "Unknown",
+        caseNumber: jd.judgment?.caseNumber || "N/A",
+        court: jd.judgment?.court || "N/A",
+        jurisdiction: jd.judgment?.jurisdiction || "N/A",
+        judgmentAmount: jd.judgment?.judgmentAmount || "0",
+        tranche: trancheLabels[jd.tranche] || jd.tranche,
+      }));
+
+      // Generate PDF
+      const pdfData = {
+        bundleName: bundle.name,
+        bundleDescription: bundle.description || "",
+        createdAt: bundle.createdAt?.toISOString() || new Date().toISOString(),
+        totalFaceValue,
+        totalRecommendedPrice,
+        judgmentCount: bundleJudgmentsList.length,
+        avgRecoveryRate,
+        tranches: trancheSummaries.filter(t => t.count > 0),
+        judgments,
+      };
+
+      const pdfDoc = generateInvestorTeaserPDF(pdfData);
+
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="bundle-${bundleId}-teaser.pdf"`
+      );
+
+      // Pipe the PDF stream to response before ending the document
+      pdfDoc.pipe(res);
+      pdfDoc.end();
+    } catch (error) {
+      console.error("Generate teaser PDF error:", error);
+      res.status(500).json({ error: "Failed to generate teaser PDF" });
     }
   });
 

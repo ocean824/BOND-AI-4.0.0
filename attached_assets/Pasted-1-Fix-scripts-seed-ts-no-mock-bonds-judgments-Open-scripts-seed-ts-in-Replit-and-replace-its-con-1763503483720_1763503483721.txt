@@ -1,0 +1,170 @@
+1. Fix scripts/seed.ts (no mock bonds/judgments)
+
+Open scripts/seed.ts in Replit and replace its contents with something like this (adjust paths if needed):
+
+// scripts/seed.ts
+import 'dotenv/config';
+import { db } from '../server/db/client.js';
+import { users /*, bonds */ } from '../db/schema.js';
+import { eq } from 'drizzle-orm';
+import { hashPassword } from '../server/services/authService.js'; // use your existing hash helper
+
+async function main() {
+  console.log('=== Seeding admin user ===');
+
+  const adminEmail = 'elite@lawpracticepros.com';
+  const [existing] = await db
+    .select()
+    .from(users)
+    .where(eq(users.email, adminEmail));
+
+  if (!existing) {
+    const passwordHash = await hashPassword('EliteLaw2025!'); // real password, hashed
+
+    await db.insert(users).values({
+      email: adminEmail,
+      passwordHash,
+      role: 'admin',
+      name: 'Elite Admin'
+    });
+
+    console.log('Admin user created:', adminEmail);
+  } else {
+    console.log('Admin user already exists, skipping.');
+  }
+
+  // OPTIONAL: seed ONE real bond/judgment record.
+  // Only do this if you have actual researched data.
+  //
+  // 1. Uncomment the `bonds` import at the top.
+  // 2. Replace ALL placeholder fields below with real values from your CRIS / CUSIP research.
+  /*
+  console.log('=== Seeding real bond/judgment record (optional) ===');
+
+  const [existingBond] = await db.select().from(bonds).limit(1);
+  if (!existingBond) {
+    await db.insert(bonds).values({
+      cusip: 'REAL_CUSIP_HERE',         // e.g. '123456AB9'
+      isin: 'REAL_ISIN_HERE',           // e.g. 'US123456AB90'
+      description: 'REAL_BOND_DESC',    // e.g. 'County Court Bond – Case 2023-XXXXX'
+      issuer: 'REAL_ISSUER_NAME',
+      couponRate: 0.0500,               // 5.00% (real coupon)
+      couponFrequency: 2,               // semiannual if that’s correct
+      issueDate: '2023-01-15',
+      maturityDate: '2033-01-15',
+      faceValue: 1000,
+      currency: 'USD',
+      lastPrice: 101.25,                // real latest price (if you have it)
+      lastYield: 0.0450,                // real latest yield (if you have it)
+      lastPriceAsOf: new Date().toISOString(),
+      source: 'client_research'
+    });
+    console.log('Real bond/judgment record seeded – verify these values are REAL before running in prod.');
+  } else {
+    console.log('Bond/judgment table already has data, skipping seed record.');
+  }
+  */
+
+  console.log('=== Seed complete ===');
+}
+
+main().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});
+
+
+Key points:
+
+✅ Admin user is real, with proper hashed password.
+
+✅ Any bond/judgment seed is inside a commented block and must be replaced with actual values before you ever uncomment it.
+
+❌ No “sample” or “mock” bonds anywhere in this file.
+
+If your schema doesn’t have a bonds table yet and instead uses judgments for the main records, just swap the type + fields accordingly.
+
+2. Ensure “create bond/judgment” UI uses only real user input
+
+In Replit, open the relevant page(s), likely something like:
+
+app/src/pages/BondsPage.tsx
+
+or a section of JudgmentsPage.tsx / BondIntakePage.tsx where you create new records.
+
+You want this pattern:
+
+Only plain inputs for real fields: CUSIP, coupon, maturity, face value, etc.
+
+No buttons that auto-fill or generate fake/example data.
+
+Search in the file for any of these patterns and remove them:
+
+mock
+
+sample
+
+demo
+
+fillWithSample
+
+handleFillWithExample()
+
+Buttons with labels like “Use example bond”, “Load demo bond”, etc.
+
+If you currently have something like:
+
+<button onClick={fillWithSampleBond}>Use sample data</button>
+
+
+delete both the button and the fillWithSampleBond function.
+
+A simple, clean form should look like this:
+
+// Example shape – adapt to your file/component name
+<div className="card">
+  <h2>Add Bond / Judgment</h2>
+
+  <label>CUSIP (required)</label>
+  <input value={cusip} onChange={(e) => setCusip(e.target.value)} />
+
+  <label>Coupon Rate %</label>
+  <input
+    type="number"
+    step="0.01"
+    value={couponRate}
+    onChange={(e) => setCouponRate(e.target.value)}
+  />
+
+  <label>Maturity Date</label>
+  <input
+    type="date"
+    value={maturityDate}
+    onChange={(e) => setMaturityDate(e.target.value)}
+  />
+
+  {/* ... any other REAL fields ... */}
+
+  <button onClick={onSave} disabled={saving}>
+    {saving ? 'Saving…' : 'Save'}
+  </button>
+</div>
+
+
+No auto-fill, no randomization, no example records. The only way a bond/judgment exists is because you or the user typed in real information.
+
+3. After that: export the zip
+
+Once you’ve:
+
+Updated scripts/seed.ts as above (no mock data).
+
+Cleaned your bond/judgment creation UI (no sample-auto-fill).
+
+Then in Replit:
+
+Run your usual build/typecheck if you have it:
+
+npm run build or npm run typecheck (optional but good).
+
+Use Replit’s “Download as zip” for the project.
