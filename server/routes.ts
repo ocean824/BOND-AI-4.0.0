@@ -9,7 +9,7 @@ import bcrypt from "bcryptjs";
 import { z } from "zod";
 import { sql } from "drizzle-orm";
 import { db } from "./db";
-import { judgments, bundleJudgments } from "@shared/schema";
+import { judgments, bundleJudgments, pricingReadyJudgmentSchema, pricingInputSchema } from "@shared/schema";
 
 export async function registerRoutes(app: Express): Promise<Server> {
   // ===== AUTH ROUTES =====
@@ -114,11 +114,31 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const { debtorName, caseNumber, judgmentAmount, notes } = req.body;
 
+      // ===== REAL DATA ONLY - NO FABRICATED DEFAULTS =====
+      // If judgmentAmount provided, validate it's a real number (not zero placeholder)
+      let validatedAmount: string | null = null;
+      if (judgmentAmount !== undefined && judgmentAmount !== null && judgmentAmount !== "") {
+        const parsedAmount = parseFloat(String(judgmentAmount));
+        if (isNaN(parsedAmount)) {
+          return res.status(400).json({ 
+            error: "Invalid judgment amount",
+            message: "Judgment amount must be a valid number"
+          });
+        }
+        if (parsedAmount <= 0) {
+          return res.status(400).json({ 
+            error: "Invalid judgment amount",
+            message: "Judgment amount must be greater than zero. Use null if amount is unknown."
+          });
+        }
+        validatedAmount = String(parsedAmount);
+      }
+
       const judgment = await storage.createJudgment({
         ownerId: req.user!.id,
         debtorName,
         caseNumber,
-        judgmentAmount: judgmentAmount ? String(judgmentAmount) : "0",
+        judgmentAmount: validatedAmount, // null if not provided, real value if provided (never "0")
         status: "uploaded",
         notes,
       });
@@ -139,6 +159,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ error: "Raw text is required" });
       }
 
+      // ===== REAL DATA EXTRACTION - NO FALLBACK PLACEHOLDERS =====
+      // This will throw if extraction fails or service unavailable
       const extracted = await extractJudgmentData(rawText);
       
       await storage.updateJudgment(judgmentId, {
@@ -147,7 +169,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         court: extracted.court,
         jurisdiction: extracted.jurisdiction,
         judgmentAmount: String(extracted.judgmentAmount),
-        judgmentDate: new Date(extracted.judgmentDate),
+        judgmentDate: extracted.judgmentDate ? new Date(extracted.judgmentDate) : null,
         rawFields: extracted.rawFields,
         status: "extracted",
       });
@@ -155,22 +177,64 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json(extracted);
     } catch (error) {
       console.error("Extract judgment error:", error);
-      res.status(500).json({ error: "Failed to extract judgment data" });
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      
+      // Return appropriate status codes based on error type
+      if (errorMessage.includes("not configured")) {
+        return res.status(503).json({ 
+          error: "AI extraction service unavailable",
+          message: "The AI extraction service is not currently configured. Please contact support."
+        });
+      }
+      
+      if (errorMessage.includes("missing required fields") || errorMessage.includes("incomplete")) {
+        return res.status(422).json({ 
+          error: "Extraction incomplete",
+          message: "Could not extract sufficient judgment data from the document. The document may be missing critical information or may not be a valid judgment document."
+        });
+      }
+      
+      res.status(500).json({ 
+        error: "Extraction failed",
+        message: "An unexpected error occurred during AI extraction. Please try again."
+      });
     }
   });
 
   app.post("/api/judgments/:id/price", authMiddleware, async (req: AuthRequest, res) => {
     try {
       const judgmentId = parseInt(req.params.id);
-      const { targetIRR, discountRate, expectedRecoveryPct } = req.body;
+
+      // ===== REAL DATA VALIDATION =====
+      // Validate pricing input parameters (no defaults allowed)
+      const inputValidation = pricingInputSchema.safeParse(req.body);
+      if (!inputValidation.success) {
+        return res.status(400).json({
+          error: "Invalid pricing parameters",
+          details: inputValidation.error.flatten().fieldErrors,
+        });
+      }
+
+      const { targetIRR, discountRate, expectedRecoveryPct } = inputValidation.data;
 
       const judgment = await storage.getJudgment(judgmentId);
       if (!judgment) {
         return res.status(404).json({ error: "Judgment not found" });
       }
 
+      // Validate judgment has required fields for pricing (no fallbacks to "0" or defaults)
+      const judgmentValidation = pricingReadyJudgmentSchema.safeParse(judgment);
+      if (!judgmentValidation.success) {
+        return res.status(400).json({
+          error: "Insufficient judgment data for pricing analysis",
+          message: "This judgment is missing required fields needed for pricing calculations. Please ensure the judgment has been properly extracted with all required data.",
+          details: judgmentValidation.error.flatten().fieldErrors,
+        });
+      }
+
+      // All validations passed - use real judgment amount (no fallback)
       const scenarios = buildMultiScenarioPricing({
-        judgmentAmount: parseFloat(judgment.judgmentAmount || "0"),
+        judgmentAmount: parseFloat(judgment.judgmentAmount!),
         targetIRR,
         discountRate,
         expectedRecoveryPct,
@@ -343,11 +407,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ===== METRICS ROUTES =====
   app.get("/api/metrics", authMiddleware, async (req: AuthRequest, res) => {
     try {
+      // ===== REAL DATA ONLY - NO FABRICATED METRICS =====
+      // Query actual pricing data without defaults/fallbacks
       const result = await db.execute(sql`
         SELECT 
           COUNT(DISTINCT j.id) as "totalJudgments",
           COALESCE(SUM(CAST(j.judgment_amount AS NUMERIC)), 0) as "totalFaceValue",
-          COALESCE(AVG(CAST(pe.expected_recovery_pct AS NUMERIC)), 60) as "averageRecovery"
+          AVG(CAST(pe.expected_recovery_pct AS NUMERIC)) as "averageRecovery",
+          SUM(CAST(pe.recommended_purchase_price AS NUMERIC)) as "totalRecommendedPurchase"
         FROM judgments j
         LEFT JOIN price_estimates pe ON pe.judgment_id = j.id AND pe.scenario_name = 'base'
         WHERE j.owner_id = ${req.user!.id}
@@ -355,43 +422,59 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const row = result.rows[0] as any;
       const totalFaceValue = parseFloat(row.totalFaceValue || "0");
-      const averageRecovery = parseFloat(row.averageRecovery || "60");
-      const totalRecommendedPurchase = totalFaceValue * (averageRecovery / 100) * 0.7;
+      
+      // Use real data only - show null when pricing data doesn't exist
+      // Do NOT fabricate averages or use default multipliers
+      const averageRecovery = row.averageRecovery !== null 
+        ? parseFloat(row.averageRecovery) 
+        : null;
+      const totalRecommendedPurchase = row.totalRecommendedPurchase !== null
+        ? parseFloat(row.totalRecommendedPurchase)
+        : null;
 
-      // Tranche breakdown
+      // Tranche breakdown - use real price estimates, not fabricated multipliers
       const trancheResult = await db.execute(sql`
         SELECT 
           bj.tranche,
           COUNT(DISTINCT j.id) as count,
-          COALESCE(SUM(CAST(j.judgment_amount AS NUMERIC)), 0) as "faceValue"
+          COALESCE(SUM(CAST(j.judgment_amount AS NUMERIC)), 0) as "faceValue",
+          SUM(CAST(pe.recommended_purchase_price AS NUMERIC)) as "recommendedPurchase"
         FROM bundle_judgments bj
         JOIN judgments j ON j.id = bj.judgment_id
+        LEFT JOIN price_estimates pe ON pe.judgment_id = j.id AND pe.scenario_name = 'base'
         WHERE j.owner_id = ${req.user!.id}
         GROUP BY bj.tranche
       `);
 
       const trancheBreakdown = {
-        senior: { count: 0, faceValue: 0, recommendedPurchase: 0 },
-        mezz: { count: 0, faceValue: 0, recommendedPurchase: 0 },
-        equity: { count: 0, faceValue: 0, recommendedPurchase: 0 },
+        senior: { count: 0, faceValue: 0, recommendedPurchase: null as number | null },
+        mezz: { count: 0, faceValue: 0, recommendedPurchase: null as number | null },
+        equity: { count: 0, faceValue: 0, recommendedPurchase: null as number | null },
       };
 
       for (const row of trancheResult.rows as any[]) {
         const tranche = row.tranche as "senior" | "mezz" | "equity";
         const faceValue = parseFloat(row.faceValue || "0");
+        const recommendedPurchase = row.recommendedPurchase !== null
+          ? parseFloat(row.recommendedPurchase)
+          : null;
+        
         trancheBreakdown[tranche] = {
           count: parseInt(row.count || "0"),
           faceValue,
-          recommendedPurchase: faceValue * 0.7,
+          recommendedPurchase, // Real data or null, never fabricated
         };
       }
 
       res.json({
         totalJudgments: parseInt(row.totalJudgments || "0"),
         totalFaceValue,
-        totalRecommendedPurchase,
-        averageRecovery,
+        totalRecommendedPurchase, // null if no pricing data exists
+        averageRecovery, // null if no pricing data exists
         trancheBreakdown,
+        _note: averageRecovery === null 
+          ? "Some metrics unavailable - judgments need pricing analysis"
+          : undefined,
       });
     } catch (error) {
       console.error("Get metrics error:", error);

@@ -197,6 +197,36 @@ export const insertChatMessageSchema = createInsertSchema(chatMessages).omit({
   createdAt: true,
 });
 
+// ===== REAL DATA VALIDATION SCHEMAS =====
+// These schemas enforce the "real data only" policy by requiring critical fields
+// and rejecting requests with incomplete data instead of allowing null/undefined values.
+
+// Judgment must have these fields for pricing analysis
+export const pricingReadyJudgmentSchema = z.object({
+  judgmentAmount: z.string()
+    .min(1, "Judgment amount is required for pricing analysis")
+    .refine((val) => !isNaN(parseFloat(val)) && parseFloat(val) > 0, {
+      message: "Judgment amount must be a positive number",
+    }),
+  debtorName: z.string()
+    .min(1, "Debtor name is required"),
+  caseNumber: z.string()
+    .min(1, "Case number is required"),
+});
+
+// Pricing request parameters must all be provided
+export const pricingInputSchema = z.object({
+  targetIRR: z.number()
+    .min(0, "Target IRR must be non-negative")
+    .max(100, "Target IRR must be less than 100%"),
+  discountRate: z.number()
+    .min(0, "Discount rate must be non-negative")
+    .max(100, "Discount rate must be less than 100%"),
+  expectedRecoveryPct: z.number()
+    .min(0, "Expected recovery percentage must be non-negative")
+    .max(100, "Expected recovery percentage cannot exceed 100%"),
+});
+
 // Types
 export type User = typeof users.$inferSelect;
 export type InsertUser = z.infer<typeof insertUserSchema>;

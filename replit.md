@@ -10,6 +10,36 @@ The platform is built as a full-stack TypeScript application with a React fronte
 
 Preferred communication style: Simple, everyday language.
 
+## Real Data Only Policy
+
+**CRITICAL REQUIREMENT**: This application operates exclusively on real judgment data. Mock/placeholder/fabricated data is strictly prohibited.
+
+### Data Sources
+Judgment records are created ONLY through:
+1. **PDF Uploads**: User uploads authentic court judgment documents, AI extracts structured data
+2. **Manual Entry**: User manually enters verified judgment information from actual court records
+3. **Never**: Mock data, sample data, placeholder values, or fabricated examples
+
+### Validation Rules
+- **Pricing Analysis**: Requires real `judgmentAmount`, `debtorName`, `caseNumber`. Returns 400 error with field-level details if data missing.
+- **Metrics/Analytics**: Shows `null` when insufficient pricing data exists. Never fabricates averages or uses default multipliers.
+- **AI Extraction**: Throws errors when extraction fails or service unavailable. Never returns synthetic placeholder records.
+- **API Responses**: Return structured errors ("Insufficient data for analysis") instead of computing with fake values.
+
+### Error Handling
+When real data is unavailable or incomplete:
+- **400 Bad Request**: Invalid or incomplete input parameters
+- **422 Unprocessable Entity**: Document missing critical judgment data
+- **503 Service Unavailable**: AI extraction service not configured
+- Never fall back to defaults like `|| "0"`, `|| "Unknown"`, or `COALESCE(..., default_value)`
+
+### Database Seeding
+The seed script (`server/seed.ts`) creates ONLY:
+- Admin user account (real credentials)
+- NO judgment/bundle data (all mock data removed)
+
+For development testing, real judgment data from actual court documents must be manually added.
+
 ## System Architecture
 
 ### Frontend Architecture

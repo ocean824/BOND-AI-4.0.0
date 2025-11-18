@@ -8,6 +8,11 @@ const openai = config.openai.enabled ? new OpenAI({
   apiKey: config.openai.apiKey
 }) : null;
 
+// ===== REAL DATA ONLY - NO SYNTHETIC PLACEHOLDERS =====
+// This extraction service returns ONLY real data extracted from documents.
+// If extraction fails or service is unavailable, it THROWS an error instead
+// of returning fabricated placeholder values.
+
 export interface ExtractionResult {
   debtorName: string;
   caseNumber: string;
@@ -21,17 +26,7 @@ export interface ExtractionResult {
 
 export async function extractJudgmentData(rawText: string): Promise<ExtractionResult> {
   if (!openai) {
-    console.error("AI extraction unavailable: OpenAI integration not configured");
-    return {
-      debtorName: "AI Service Unavailable",
-      caseNumber: "N/A",
-      court: "N/A",
-      jurisdiction: "N/A",
-      judgmentAmount: 0,
-      judgmentDate: new Date().toISOString().split('T')[0],
-      confidence: 0,
-      rawFields: { error: "AI extraction service is not configured. Please set up OpenAI integration." },
-    };
+    throw new Error("AI extraction service not configured - OpenAI integration required");
   }
 
   try {
@@ -64,33 +59,39 @@ Return JSON only:`;
       max_completion_tokens: 8192,
     });
 
-    const content = response.choices[0]?.message?.content || "{}";
+    const content = response.choices[0]?.message?.content;
+    if (!content) {
+      throw new Error("AI extraction returned empty response - no data extracted");
+    }
+
     const extracted = JSON.parse(content);
 
-    // Validate and provide defaults
+    // ===== VALIDATE REQUIRED FIELDS - NO DEFAULTS =====
+    // If AI couldn't extract critical fields, FAIL instead of fabricating values
+    if (!extracted.debtorName || !extracted.judgmentAmount) {
+      throw new Error("AI extraction incomplete - missing required fields (debtorName, judgmentAmount). Document may not contain sufficient judgment data.");
+    }
+
+    const judgmentAmount = parseFloat(extracted.judgmentAmount);
+    if (isNaN(judgmentAmount) || judgmentAmount <= 0) {
+      throw new Error(`AI extraction failed - invalid judgment amount: ${extracted.judgmentAmount}`);
+    }
+
+    // Return ONLY real extracted data - no fabricated defaults
     return {
-      debtorName: extracted.debtorName || "Unknown Debtor",
-      caseNumber: extracted.caseNumber || "N/A",
-      court: extracted.court || "Unknown Court",
-      jurisdiction: extracted.jurisdiction || "Unknown",
-      judgmentAmount: parseFloat(extracted.judgmentAmount) || 0,
-      judgmentDate: extracted.judgmentDate || new Date().toISOString().split('T')[0],
-      confidence: Math.min(100, Math.max(0, extracted.confidence || 75)),
+      debtorName: extracted.debtorName,
+      caseNumber: extracted.caseNumber || null,
+      court: extracted.court || null,
+      jurisdiction: extracted.jurisdiction || null,
+      judgmentAmount,
+      judgmentDate: extracted.judgmentDate || null,
+      confidence: Math.min(100, Math.max(0, extracted.confidence || 0)),
       rawFields: extracted,
     };
   } catch (error) {
     console.error("AI extraction error:", error);
-    // Return safe defaults on error
-    return {
-      debtorName: "Extraction Failed",
-      caseNumber: "N/A",
-      court: "N/A",
-      jurisdiction: "N/A",
-      judgmentAmount: 0,
-      judgmentDate: new Date().toISOString().split('T')[0],
-      confidence: 0,
-      rawFields: { error: String(error) },
-    };
+    // DO NOT return synthetic placeholder data - propagate error to caller
+    throw new Error(`AI extraction failed: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 
