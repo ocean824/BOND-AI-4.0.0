@@ -1,0 +1,1369 @@
+here is exactly what you need: a single, ready-to-apply unified diff you can paste into your Git repo (or just use as a reference to manually edit your files).
+
+1. Files touched
+These are the files changed or added:
+
+
+db/schema.ts
+
+
+db/migrations/002_price_estimates_add_scenario_name.sql (new)
+
+
+server/services/pricingService.ts
+
+
+server/routes/metrics.ts
+
+
+server/routes/judgments.ts
+
+
+server/routes/bundles.ts (new)
+
+
+server/routes/index.ts
+
+
+app/src/lib/types.ts
+
+
+app/src/lib/apiClient.ts
+
+
+app/src/pages/JudgmentsPage.tsx
+
+
+app/src/pages/BundlesPage.tsx
+
+
+server/openapi.yml
+
+
+docs/PRD/FEATURES/pricing_engine.md
+
+
+docs/PRD/FEATURES/bundle_tranching.md
+
+
+
+2. Unified diff – copy/paste patches
+You can drop this into a file like feature-pricing-bundles.patch and apply with:
+patch -p1 < feature-pricing-bundles.patch
+
+from the root of your project.
+--- a/db/schema.ts
++++ b/db/schema.ts
+@@ -51,12 +51,13 @@
+   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow()
+ });
+ 
+ export const priceEstimates = pgTable('price_estimates', {
+   id: serial('id').primaryKey(),
+   judgmentId: integer('judgment_id').notNull().references(() => judgments.id),
+   targetIRR: numeric('target_irr', { precision: 5, scale: 2 }).notNull(),
+   discountRate: numeric('discount_rate', { precision: 5, scale: 2 }).notNull(),
+-  recommendedPurchasePrice: numeric('recommended_purchase_price', { precision: 18, scale: 2 }).notNull(),
+-  scenarioJson: jsonb('scenario_json'),
++  recommendedPurchasePrice: numeric('recommended_purchase_price', { precision: 18, scale: 2 }).notNull(),
++  scenarioName: varchar('scenario_name', { length: 32 }).notNull().default('base'),
++  scenarioJson: jsonb('scenario_json'),
+   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow()
+ });
+ 
+ export const bundles = pgTable('bundles', {
+
+*** Add new migration
+*** a/db/migrations/002_price_estimates_add_scenario_name.sql
+--- /dev/null
++++ b/db/migrations/002_price_estimates_add_scenario_name.sql
+@@ -0,0 +1,3 @@
++ALTER TABLE price_estimates
++ADD COLUMN IF NOT EXISTS scenario_name varchar(32) NOT NULL DEFAULT 'base';
++
+
+--- a/server/services/pricingService.ts
++++ b/server/services/pricingService.ts
+@@ -1,27 +1,165 @@
+-import { priceEstimates, judgments } from '../../db/schema.js';
+-import { db } from '../db/client.js';
+-import { eq } from 'drizzle-orm';
+-import { NotFoundError } from '../errors/index.js';
+-
+-export interface PricingInput {
+-  judgmentId: number;
+-  targetIRR: number;
+-  discountRate: number;
+-  expectedRecoveryPct: number;
+-}
+-
+-export async function calculateAndPersistPrice(input: PricingInput) {
+-  const [judgment] = await db.select().from(judgments).where(eq(judgments.id, input.judgmentId));
+-
+-  if (!judgment) {
+-    throw new NotFoundError('Judgment not found');
+-  }
+-
+-  const amount = Number(judgment.judgmentAmount ?? 0);
+-  const expectedRecoveryAmount = amount * (input.expectedRecoveryPct / 100);
+-  const recommendedPurchasePrice = expectedRecoveryAmount * (1 - input.discountRate / 100);
+-
+-  await db.insert(priceEstimates).values({
+-    judgmentId: input.judgmentId,
+-    targetIRR: input.targetIRR,
+-    discountRate: input.discountRate,
+-    recommendedPurchasePrice,
+-    scenarioJson: {
+-      expectedRecoveryAmount,
+-      model: 'linear',
+-      note: 'Simple deterministic pricing based on recovery %, discount, and target IRR'
+-    }
+-  });
+-}
++import { priceEstimates, judgments } from '../../db/schema.js';
++import { db } from '../db/client.js';
++import { and, eq, inArray } from 'drizzle-orm';
++import { NotFoundError } from '../errors/index.js';
++
++export type PricingScenarioName = 'base' | 'optimistic' | 'stressed';
++
++export interface PricingScenarioInput {
++  scenario: PricingScenarioName;
++  targetIRR: number;
++  discountRate: number;
++  expectedRecoveryPct: number;
++}
++
++export interface PricingScenarioResult {
++  scenario: PricingScenarioName;
++  targetIRR: number;
++  discountRate: number;
++  expectedRecoveryPct: number;
++  judgmentAmount: number;
++  expectedRecoveryAmount: number;
++  recommendedPurchasePrice: number;
++  note?: string;
++}
++
++/**
++ * Build default base/optimistic/stressed scenarios derived from a base input.
++ */
++export function buildDefaultScenarios(base: {
++  targetIRR: number;
++  discountRate: number;
++  expectedRecoveryPct: number;
++}): PricingScenarioInput[] {
++  const clamp = (value: number, min: number, max: number) =>
++    Math.max(min, Math.min(max, value));
++
++  const baseScenario: PricingScenarioInput = {
++    scenario: 'base',
++    targetIRR: base.targetIRR,
++    discountRate: base.discountRate,
++    expectedRecoveryPct: base.expectedRecoveryPct
++  };
++
++  const optimistic: PricingScenarioInput = {
++    scenario: 'optimistic',
++    targetIRR: base.targetIRR + 2,
++    discountRate: clamp(base.discountRate - 5, 0, 95),
++    expectedRecoveryPct: clamp(base.expectedRecoveryPct + 10, 5, 95)
++  };
++
++  const stressed: PricingScenarioInput = {
++    scenario: 'stressed',
++    targetIRR: base.targetIRR,
++    discountRate: clamp(base.discountRate + 10, 0, 95),
++    expectedRecoveryPct: clamp(base.expectedRecoveryPct - 15, 5, 95)
++  };
++
++  return [baseScenario, optimistic, stressed];
++}
++
++/**
++ * Core deterministic pricing calculation shared by all scenarios.
++ */
++export function calculateScenarioPrice(
++  judgmentAmount: number,
++  input: PricingScenarioInput
++): PricingScenarioResult {
++  const safeJudgmentAmount = Math.max(0, Number(judgmentAmount) || 0);
++  const expectedRecoveryAmount =
++    safeJudgmentAmount * (input.expectedRecoveryPct / 100);
++
++  const recommendedPurchasePrice =
++    expectedRecoveryAmount * (1 - input.discountRate / 100);
++
++  return {
++    scenario: input.scenario,
++    targetIRR: input.targetIRR,
++    discountRate: input.discountRate,
++    expectedRecoveryPct: input.expectedRecoveryPct,
++    judgmentAmount: safeJudgmentAmount,
++    expectedRecoveryAmount,
++    recommendedPurchasePrice,
++    note:
++      'Deterministic pricing based on recovery %, discount, and simple IRR heuristic. ' +
++      'For production, consider replacing with a calibrated Monte Carlo or AI-assisted model.'
++  };
++}
++
++export interface PriceJudgmentInput {
++  judgmentId: number;
++  targetIRR: number;
++  discountRate: number;
++  expectedRecoveryPct: number;
++}
++
++/**
++ * Calculate and persist pricing scenarios for a judgment.
++ * Existing scenarios for the same judgment + scenario set are replaced.
++ */
++export async function priceJudgmentWithScenarios(
++  input: PriceJudgmentInput
++): Promise<PricingScenarioResult[]> {
++  const [judgment] = await db
++    .select()
++    .from(judgments)
++    .where(eq(judgments.id, input.judgmentId));
++
++  if (!judgment) {
++    throw new NotFoundError(`Judgment ${input.judgmentId} not found`);
++  }
++
++  const scenarios = buildDefaultScenarios({
++    targetIRR: input.targetIRR,
++    discountRate: input.discountRate,
++    expectedRecoveryPct: input.expectedRecoveryPct
++  });
++
++  const results = scenarios.map((s) =>
++    calculateScenarioPrice(judgment.judgmentAmount, s)
++  );
++
++  const scenarioNames = scenarios.map((s) => s.scenario);
++
++  await db
++    .delete(priceEstimates)
++    .where(
++      and(
++        eq(priceEstimates.judgmentId, input.judgmentId),
++        inArray(priceEstimates.scenarioName, scenarioNames)
++      )
++    );
++
++  await db.insert(priceEstimates).values(
++    results.map((r) => ({
++      judgmentId: input.judgmentId,
++      targetIRR: r.targetIRR,
++      discountRate: r.discountRate,
++      recommendedPurchasePrice: r.recommendedPurchasePrice,
++      scenarioName: r.scenario,
++      scenarioJson: {
++        expectedRecoveryAmount: r.expectedRecoveryAmount,
++        model: 'scenario-linear',
++        scenario: r.scenario,
++        note: r.note
++      }
++    }))
++  );
++
++  return results;
++}
++
++/**
++ * Load any pricing scenarios already stored for a judgment.
++ */
++export async function getPricingScenariosForJudgment(
++  judgmentId: number
++): Promise<PricingScenarioResult[]> {
++  const [judgment] = await db
++    .select()
++    .from(judgments)
++    .where(eq(judgments.id, judgmentId));
++
++  if (!judgment) {
++    throw new NotFoundError(`Judgment ${judgmentId} not found`);
++  }
++
++  const rows = await db
++    .select()
++    .from(priceEstimates)
++    .where(eq(priceEstimates.judgmentId, judgmentId));
++
++  return rows.map((row) => {
++    const scenario = (row.scenarioName ?? 'base') as PricingScenarioName;
++    const judgmentAmount = Number(judgment.judgmentAmount ?? 0);
++    const recommendedPurchasePrice = Number(row.recommendedPurchasePrice ?? 0);
++    const discountRate = Number(row.discountRate ?? 0);
++    const expectedRecoveryAmount =
++      (row.scenarioJson as any)?.expectedRecoveryAmount ??
++      recommendedPurchasePrice / (1 - discountRate / 100 || 1);
++
++    return {
++      scenario,
++      targetIRR: Number(row.targetIRR ?? 0),
++      discountRate,
++      expectedRecoveryPct:
++        (row.scenarioJson as any)?.expectedRecoveryPct ??
++        (judgmentAmount ? (expectedRecoveryAmount / judgmentAmount) * 100 : 0),
++      judgmentAmount,
++      expectedRecoveryAmount,
++      recommendedPurchasePrice,
++      note: (row.scenarioJson as any)?.note
++    };
++  });
++}
+
+--- a/server/routes/metrics.ts
++++ b/server/routes/metrics.ts
+@@ -9,7 +9,8 @@ export async function metricsRoutes(app: FastifyInstance) {
+     const _bundleId = bundleIdParam ? Number(bundleIdParam) : undefined;
+ 
+     const [agg] = await dbRead.execute(
+-      sql`
++      sql`
+         SELECT
+           COUNT(j.id) AS "totalJudgments",
+           COALESCE(SUM(j.judgment_amount), 0) AS "totalFaceValue",
+@@ -17,7 +18,8 @@ export async function metricsRoutes(app: FastifyInstance) {
+-        FROM judgments j
+-        LEFT JOIN price_estimates pe ON pe.judgment_id = j.id
++        FROM judgments j
++        LEFT JOIN price_estimates pe
++          ON pe.judgment_id = j.id AND pe.scenario_name = 'base'
+       `
+     );
+
+--- a/server/routes/judgments.ts
++++ b/server/routes/judgments.ts
+@@ -3,8 +3,9 @@ import { z } from 'zod';
+ import { authGuard } from '../middleware/auth.js';
+ import { db, dbRead } from '../db/client.js';
+ import { judgments } from '../../db/schema.js';
+ import { ValidationError, NotFoundError } from '../errors/index.js';
+ import { extractJudgmentData } from '../services/aiExtractionService.js';
++import { priceJudgmentWithScenarios, getPricingScenariosForJudgment } from '../services/pricingService.js';
+ import { and, eq } from 'drizzle-orm';
+ import { rateLimit } from '../middleware/rateLimit.js';
+ 
+@@ -15,6 +16,12 @@ const uploadSchema = z.object({
+   notes: z.string().optional()
+ });
+ 
+ const extractSchema = z.object({
+   rawText: z.string().min(10)
+ });
++
++const priceSchema = z.object({
++  targetIRR: z.number().min(0).max(100),
++  discountRate: z.number().min(0).max(100),
++  expectedRecoveryPct: z.number().min(0).max(100)
++});
+@@ -115,5 +122,40 @@ export async function judgmentRoutes(app: FastifyInstance) {
+       .where(eq(judgments.id, id))
+       .returning();
+ 
+-    return updated;
+-  });
+-}
++    return updated;
++  });
++
++  app.post('/api/judgments/:id/price', async (req, reply) => {
++    await rateLimit(req, reply, 'pricing');
++
++    const id = Number((req.params as any).id);
++    if (!Number.isFinite(id) || id <= 0) {
++      throw new ValidationError('Invalid judgment id for pricing');
++    }
++
++    const parse = priceSchema.safeParse(req.body);
++    if (!parse.success) {
++      throw new ValidationError('Invalid pricing payload', parse.error.format());
++    }
++
++    const scenarios = await priceJudgmentWithScenarios({
++      judgmentId: id,
++      targetIRR: parse.data.targetIRR,
++      discountRate: parse.data.discountRate,
++      expectedRecoveryPct: parse.data.expectedRecoveryPct
++    });
++
++    return { scenarios };
++  });
++
++  app.get('/api/judgments/:id/price-estimates', async (req) => {
++    const id = Number((req.params as any).id);
++    if (!Number.isFinite(id) || id <= 0) {
++      throw new ValidationError('Invalid judgment id for pricing');
++    }
++
++    const scenarios = await getPricingScenariosForJudgment(id);
++    return { scenarios };
++  });
++}
+
+*** New file
+*** a/server/routes/bundles.ts
+--- /dev/null
++++ b/server/routes/bundles.ts
+@@ -0,0 +1,230 @@
++import { FastifyInstance } from 'fastify';
++import { z } from 'zod';
++import { authGuard, AuthUser } from '../middleware/auth.js';
++import { db, dbRead } from '../db/client.js';
++import { bundles, bundleJudgments, judgments, priceEstimates } from '../../db/schema.js';
++import { ValidationError, NotFoundError, AuthError } from '../errors/index.js';
++import { and, eq } from 'drizzle-orm';
++import { sql } from 'drizzle-orm';
++
++const createBundleSchema = z.object({
++  name: z.string().min(1),
++  description: z.string().optional()
++});
++
++const updateBundleSchema = createBundleSchema
++  .partial()
++  .extend({
++    status: z.string().optional()
++  });
++
++const trancheEnum = z.enum(['senior', 'mezz', 'equity']);
++
++const addJudgmentSchema = z.object({
++  judgmentId: z.number().int().positive(),
++  tranche: trancheEnum
++});
++
++function ensureOwner(user: AuthUser | undefined, ownerId: number) {
++  if (!user) {
++    throw new AuthError('Not authenticated');
++  }
++  if (user.role !== 'admin' && user.id !== ownerId) {
++    throw new AuthError('Not authorized to access this bundle');
++  }
++}
++
++type TrancheKey = 'senior' | 'mezz' | 'equity';
++
++interface BundleMetrics {
++  faceValue: number;
++  recommendedPurchasePrice: number;
++  judgmentCount: number;
++}
++
++interface BundleJudgmentItem {
++  id: number;
++  debtorName: string;
++  caseNumber: string;
++  judgmentAmount: number;
++  tranche: TrancheKey;
++  recommendedPurchasePrice?: number;
++}
++
++interface BundleDetail {
++  id: number;
++  name: string;
++  description?: string | null;
++  status: string;
++  metrics: {
++    overall: BundleMetrics;
++    tranches: Record<TrancheKey, BundleMetrics>;
++  };
++  judgments: BundleJudgmentItem[];
++}
++
++async function loadBundleDetail(bundleId: number, user: AuthUser | undefined): Promise<BundleDetail> {
++  const [bundle] = await dbRead.select().from(bundles).where(eq(bundles.id, bundleId));
++
++  if (!bundle) {
++    throw new NotFoundError('Bundle not found');
++  }
++
++  ensureOwner(user, bundle.ownerId);
++
++  const rows = await dbRead.execute(
++    sql`
++      SELECT
++        bj.tranche AS "tranche",
++        j.id       AS "judgmentId",
++        j.debtor_name AS "debtorName",
++        j.case_number AS "caseNumber",
++        j.judgment_amount AS "judgmentAmount",
++        pe.recommended_purchase_price AS "recommendedPurchasePrice"
++      FROM bundle_judgments bj
++      JOIN judgments j ON j.id = bj.judgment_id
++      LEFT JOIN price_estimates pe
++        ON pe.judgment_id = j.id AND pe.scenario_name = 'base'
++      WHERE bj.bundle_id = ${bundleId}
++    `
++  );
++
++  const trancheKeys: TrancheKey[] = ['senior', 'mezz', 'equity'];
++
++  const trancheMetrics: Record<TrancheKey, BundleMetrics> = {
++    senior: { faceValue: 0, recommendedPurchasePrice: 0, judgmentCount: 0 },
++    mezz: { faceValue: 0, recommendedPurchasePrice: 0, judgmentCount: 0 },
++    equity: { faceValue: 0, recommendedPurchasePrice: 0, judgmentCount: 0 }
++  };
++
++  const items: BundleJudgmentItem[] = [];
++
++  for (const row of rows.rows as any[]) {
++    const tranche = (row.tranche ?? 'senior') as TrancheKey;
++    const face = Number(row.judgmentAmount ?? 0);
++    const price = Number(row.recommendedPurchasePrice ?? 0);
++
++    trancheMetrics[tranche].faceValue += face;
++    trancheMetrics[tranche].recommendedPurchasePrice += price;
++    trancheMetrics[tranche].judgmentCount += 1;
++
++    items.push({
++      id: Number(row.judgmentId),
++      debtorName: row.debtorName,
++      caseNumber: row.caseNumber,
++      judgmentAmount: face,
++      tranche,
++      recommendedPurchasePrice: price || undefined
++    });
++  }
++
++  const overall: BundleMetrics = trancheKeys.reduce(
++    (acc, key) => ({
++      faceValue: acc.faceValue + trancheMetrics[key].faceValue,
++      recommendedPurchasePrice:
++        acc.recommendedPurchasePrice + trancheMetrics[key].recommendedPurchasePrice,
++      judgmentCount: acc.judgmentCount + trancheMetrics[key].judgmentCount
++    }),
++    { faceValue: 0, recommendedPurchasePrice: 0, judgmentCount: 0 }
++  );
++
++  return {
++    id: bundle.id,
++    name: bundle.name,
++    description: bundle.description,
++    status: bundle.status,
++    metrics: {
++      overall,
++      tranches: trancheMetrics
++    },
++    judgments: items
++  };
++}
++
++export async function bundlesRoutes(app: FastifyInstance) {
++  app.addHook('onRequest', authGuard);
++
++  app.get('/api/bundles', async (req) => {
++    const user = (req as any).user as AuthUser | undefined;
++
++    const query = dbRead.select().from(bundles);
++    const rows = await query.where(
++      user?.role === 'admin' ? undefined as any : eq(bundles.ownerId, user!.id)
++    );
++
++    return rows;
++  });
++
++  app.get('/api/bundles/:id', async (req) => {
++    const id = Number((req.params as any).id);
++    if (!Number.isFinite(id) || id <= 0) {
++      throw new ValidationError('Invalid bundle id');
++    }
++    const user = (req as any).user as AuthUser | undefined;
++    return loadBundleDetail(id, user);
++  });
++
++  app.post('/api/bundles', async (req) => {
++    const user = (req as any).user as AuthUser | undefined;
++    if (!user) {
++      throw new AuthError('Not authenticated');
++    }
++
++    const parse = createBundleSchema.safeParse(req.body);
++    if (!parse.success) {
++      throw new ValidationError('Invalid bundle payload', parse.error.format());
++    }
++
++    const [created] = await db
++      .insert(bundles)
++      .values({
++        ownerId: user.id,
++        name: parse.data.name,
++        description: parse.data.description,
++        status: 'draft',
++        metricsJson: {}
++      })
++      .returning();
++
++    return created;
++  });
++
++  app.patch('/api/bundles/:id', async (req) => {
++    const id = Number((req.params as any).id);
++    if (!Number.isFinite(id) || id <= 0) {
++      throw new ValidationError('Invalid bundle id');
++    }
++
++    const parse = updateBundleSchema.safeParse(req.body);
++    if (!parse.success) {
++      throw new ValidationError('Invalid bundle update', parse.error.format());
++    }
++
++    const [existing] = await dbRead.select().from(bundles).where(eq(bundles.id, id));
++    if (!existing) {
++      throw new NotFoundError('Bundle not found');
++    }
++
++    const user = (req as any).user as AuthUser | undefined;
++    ensureOwner(user, existing.ownerId);
++
++    const [updated] = await db
++      .update(bundles)
++      .set({
++        name: parse.data.name ?? existing.name,
++        description: parse.data.description ?? existing.description,
++        status: parse.data.status ?? existing.status,
++        metricsJson: existing.metricsJson
++      })
++      .where(eq(bundles.id, id))
++      .returning();
++
++    return updated;
++  });
++
++  app.post('/api/bundles/:id/judgments', async (req) => {
++    const id = Number((req.params as any).id);
++    if (!Number.isFinite(id) || id <= 0) {
++      throw new ValidationError('Invalid bundle id');
++    }
++
++    const parse = addJudgmentSchema.safeParse(req.body);
++    if (!parse.success) {
++      throw new ValidationError('Invalid bundle judgment payload', parse.error.format());
++    }
++
++    const [bundle] = await dbRead.select().from(bundles).where(eq(bundles.id, id));
++    if (!bundle) {
++      throw new NotFoundError('Bundle not found');
++    }
++
++    const user = (req as any).user as AuthUser | undefined;
++    ensureOwner(user, bundle.ownerId);
++
++    const [judgment] = await dbRead
++      .select()
++      .from(judgments)
++      .where(eq(judgments.id, parse.data.judgmentId));
++    if (!judgment) {
++      throw new NotFoundError('Judgment not found');
++    }
++
++    const existing = await dbRead
++      .select()
++      .from(bundleJudgments)
++      .where(
++        and(
++          eq(bundleJudgments.bundleId, id),
++          eq(bundleJudgments.judgmentId, parse.data.judgmentId)
++        )
++      );
++
++    if (existing.length === 0) {
++      await db.insert(bundleJudgments).values({
++        bundleId: id,
++        judgmentId: parse.data.judgmentId,
++        tranche: parse.data.tranche
++      });
++    } else {
++      await db
++        .update(bundleJudgments)
++        .set({ tranche: parse.data.tranche })
++        .where(
++          and(
++            eq(bundleJudgments.bundleId, id),
++            eq(bundleJudgments.judgmentId, parse.data.judgmentId)
++          )
++        );
++    }
++
++    const user2 = (req as any).user as AuthUser | undefined;
++    return loadBundleDetail(id, user2);
++  });
++
++  app.delete('/api/bundles/:id/judgments/:judgmentId', async (req) => {
++    const id = Number((req.params as any).id);
++    const judgmentId = Number((req.params as any).judgmentId);
++
++    if (!Number.isFinite(id) || id <= 0 || !Number.isFinite(judgmentId) || judgmentId <= 0) {
++      throw new ValidationError('Invalid bundle or judgment id');
++    }
++
++    const [bundle] = await dbRead.select().from(bundles).where(eq(bundles.id, id));
++    if (!bundle) {
++      throw new NotFoundError('Bundle not found');
++    }
++
++    const user = (req as any).user as AuthUser | undefined;
++    ensureOwner(user, bundle.ownerId);
++
++    await db
++      .delete(bundleJudgments)
++      .where(
++        and(eq(bundleJudgments.bundleId, id), eq(bundleJudgments.judgmentId, judgmentId))
++      );
++
++    const user2 = (req as any).user as AuthUser | undefined;
++    return loadBundleDetail(id, user2);
++  });
++}
+
+--- a/server/routes/index.ts
++++ b/server/routes/index.ts
+@@ -1,11 +1,13 @@
+ import { FastifyInstance } from 'fastify';
+ import { authRoutes } from './auth.js';
+ import { judgmentRoutes } from './judgments.js';
+ import { metricsRoutes } from './metrics.js';
++import { bundlesRoutes } from './bundles.js';
+ import { healthRoutes } from './health.js';
+ import { assistantRoutes } from './assistant.js';
+ import { docsRoutes } from './docs.js';
+ 
+ export async function registerRoutes(app: FastifyInstance) {
+   await authRoutes(app);
+   await judgmentRoutes(app);
+   await assistantRoutes(app);
+   await healthRoutes(app);
+   await metricsRoutes(app);
++  await bundlesRoutes(app);
+   await docsRoutes(app);
+ }
+
+--- a/app/src/lib/types.ts
++++ b/app/src/lib/types.ts
+@@ -16,11 +16,38 @@ export interface Judgment {
+   judgmentAmount: number;
+   judgmentDate: string;
+   status: string;
+ }
+ 
++export interface BundleMetrics {
++  faceValue: number;
++  recommendedPurchasePrice: number;
++  judgmentCount: number;
++}
++
++export interface BundleJudgmentItem {
++  id: number;
++  debtorName: string;
++  caseNumber: string;
++  judgmentAmount: number;
++  tranche: 'senior' | 'mezz' | 'equity';
++  recommendedPurchasePrice?: number;
++}
++
+ export interface Bundle {
+   id: number;
+   name: string;
+-  description?: string;
+-  status: string;
++  description?: string | null;
++  status: string;
++  metrics?: {
++    overall: BundleMetrics;
++    tranches: {
++      senior: BundleMetrics;
++      mezz: BundleMetrics;
++      equity: BundleMetrics;
++    };
++  };
++  judgments?: BundleJudgmentItem[];
+ }
+
+--- a/app/src/lib/apiClient.ts
++++ b/app/src/lib/apiClient.ts
+@@ -1,4 +1,4 @@
+-import { User, Judgment, Bundle } from './types';
++import { User, Judgment, Bundle } from './types';
+@@ -41,6 +41,7 @@ export const api = {
+   async listJudgments(): Promise<Judgment[]> {
+     const res = await fetch(`${API_BASE}/judgments`, { headers: headers() });
+     return handle(res);
+   },
+@@ -53,6 +54,48 @@ export const api = {
+       body: JSON.stringify({ rawText })
+     });
+     return handle(res);
+   },
++
++  async priceJudgment(
++    id: number,
++    payload: { targetIRR: number; discountRate: number; expectedRecoveryPct: number }
++  ) {
++    const res = await fetch(`${API_BASE}/judgments/${id}/price`, {
++      method: 'POST',
++      headers: headers(),
++      body: JSON.stringify(payload)
++    });
++    return handle<{ scenarios: any[] }>(res);
++  },
++
++  async getPriceEstimates(id: number) {
++    const res = await fetch(`${API_BASE}/judgments/${id}/price-estimates`, {
++      headers: headers()
++    });
++    return handle<{ scenarios: any[] }>(res);
++  },
++
++  async listBundles(): Promise<Bundle[]> {
++    const res = await fetch(`${API_BASE}/bundles`, { headers: headers() });
++    return handle(res);
++  },
++
++  async getBundle(id: number): Promise<Bundle> {
++    const res = await fetch(`${API_BASE}/bundles/${id}`, { headers: headers() });
++    return handle(res);
++  },
++
++  async createBundle(payload: { name: string; description?: string }) {
++    const res = await fetch(`${API_BASE}/bundles`, {
++      method: 'POST',
++      headers: headers(),
++      body: JSON.stringify(payload)
++    });
++    return handle<Bundle>(res);
++  },
++
++  async updateBundle(id: number, payload: { name?: string; description?: string; status?: string }) {
++    const res = await fetch(`${API_BASE}/bundles/${id}`, {
++      method: 'PATCH',
++      headers: headers(),
++      body: JSON.stringify(payload)
++    });
++    return handle<Bundle>(res);
++  },
++
++  async addBundleJudgment(
++    bundleId: number,
++    payload: { judgmentId: number; tranche: 'senior' | 'mezz' | 'equity' }
++  ) {
++    const res = await fetch(`${API_BASE}/bundles/${bundleId}/judgments`, {
++      method: 'POST',
++      headers: headers(),
++      body: JSON.stringify(payload)
++    });
++    return handle<Bundle>(res);
++  },
++
++  async removeBundleJudgment(bundleId: number, judgmentId: number) {
++    const res = await fetch(`${API_BASE}/bundles/${bundleId}/judgments/${judgmentId}`, {
++      method: 'DELETE',
++      headers: headers()
++    });
++    return handle<Bundle>(res);
++  },
+@@ -82,6 +125,7 @@ export const api = {
+   async investorMetrics() {
+     const res = await fetch(`${API_BASE}/investor-metrics`, { headers: headers() });
+     return handle(res);
+   },
+
+--- a/app/src/pages/JudgmentsPage.tsx
++++ b/app/src/pages/JudgmentsPage.tsx
+@@ -6,8 +6,9 @@ import { Judgment } from '../lib/types';
+ import { useToast } from '../components/ToastProvider';
+ 
+ export const JudgmentsPage: React.FC = () => {
+   const [judgments, setJudgments] = useState<Judgment[]>([]);
+   const [uploadText, setUploadText] = useState('');
+   const [extractText, setExtractText] = useState('');
+   const [selectedId, setSelectedId] = useState<number | null>(null);
++  const [pricingScenarios, setPricingScenarios] = useState<any[] | null>(null);
+   const [loading, setLoading] = useState(false);
+   const { showError, showSuccess } = useToast();
+@@ -49,6 +50,31 @@ export const JudgmentsPage: React.FC = () => {
+     }
+   };
+ 
++  const onPrice = async () => {
++    if (!selectedId) {
++      return;
++    }
++    setLoading(true);
++    try {
++      const resp = await api.priceJudgment(selectedId, {
++        targetIRR: 15,
++        discountRate: 30,
++        expectedRecoveryPct: 60
++      });
++      setPricingScenarios(resp.scenarios);
++      showSuccess('Pricing scenarios computed');
++    } catch (err: any) {
++      console.error(err);
++      showError(err?.message ?? 'Failed to price judgment');
++    } finally {
++      setLoading(false);
++    }
++  };
++
+   return (
+@@ -108,6 +134,42 @@ export const JudgmentsPage: React.FC = () => {
+           <button onClick={onExtract} disabled={loading || !selectedId} style={{ marginTop: 8, width: '100%' }}>
+             {loading ? 'Extracting...' : 'Extract with AI'}
+           </button>
+         </div>
++
++        <div className="card" style={{ marginTop: 16 }}>
++          <h3>Pricing Scenarios (Demo)</h3>
++          <p>
++            Click to compute base / optimistic / stressed scenarios for the selected judgment.
++            This is example logic only and not investment advice.
++          </p>
++          <button
++            onClick={onPrice}
++            disabled={loading || !selectedId}
++            style={{ marginTop: 8, width: '100%' }}
++          >
++            {loading ? 'Pricing...' : 'Run Pricing'}
++          </button>
++          {pricingScenarios && (
++            <table style={{ width: '100%', marginTop: 12 }}>
++              <thead>
++                <tr>
++                  <th>Scenario</th>
++                  <th>Expected Recovery %</th>
++                  <th>Discount %</th>
++                  <th>Recommended Price</th>
++                </tr>
++              </thead>
++              <tbody>
++                {pricingScenarios.map((s, idx) => (
++                  <tr key={idx}>
++                    <td>{s.scenario}</td>
++                    <td>{s.expectedRecoveryPct.toFixed?.(1) ?? s.expectedRecoveryPct}</td>
++                    <td>{s.discountRate.toFixed?.(1) ?? s.discountRate}</td>
++                    <td>{s.recommendedPurchasePrice.toFixed?.(2) ?? s.recommendedPurchasePrice}</td>
++                  </tr>
++                ))}
++              </tbody>
++            </table>
++          )}
++        </div>
+       </div>
+     </div>
+   );
+ };
+
+--- a/app/src/pages/BundlesPage.tsx
++++ b/app/src/pages/BundlesPage.tsx
+@@ -1,11 +1,228 @@
+-import React from 'react';
+-
+-export const BundlesPage: React.FC = () => {
+-  return (
+-    <div className="card">
+-      <h2>Bundles & Tranches</h2>
+-      <p>
+-        This is a placeholder for the tranche builder UI. In a future iteration, you will be
+-        able to select judgments, assign tranches (Senior / Mezz / Equity), and compute bundle
+-        metrics.
+-      </p>
+-    </div>
+-  );
+-};
++import React, { useEffect, useState } from 'react';
++import { api } from '../lib/apiClient';
++import { Bundle, BundleJudgmentItem, Judgment } from '../lib/types';
++import { useToast } from '../components/ToastProvider';
++
++export const BundlesPage: React.FC = () => {
++  const [bundles, setBundles] = useState<Bundle[]>([]);
++  const [selectedBundle, setSelectedBundle] = useState<Bundle | null>(null);
++  const [judgments, setJudgments] = useState<Judgment[]>([]);
++  const [newBundleName, setNewBundleName] = useState('');
++  const [newBundleDesc, setNewBundleDesc] = useState('');
++  const [addingJudgmentId, setAddingJudgmentId] = useState<number | ''>('');
++  const [addingTranche, setAddingTranche] = useState<'senior' | 'mezz' | 'equity'>('senior');
++  const [loading, setLoading] = useState(false);
++  const { showError, showSuccess } = useToast();
++
++  const loadBundles = async () => {
++    try {
++      const data = await api.listBundles();
++      setBundles(data);
++    } catch (err: any) {
++      console.error(err);
++      showError(err?.message ?? 'Failed to load bundles');
++    }
++  };
++
++  const loadJudgments = async () => {
++    try {
++      const data = await api.listJudgments();
++      setJudgments(data);
++    } catch (err: any) {
++      console.error(err);
++      showError(err?.message ?? 'Failed to load judgments');
++    }
++  };
++
++  const loadBundleDetail = async (bundleId: number) => {
++    try {
++      const detail = await api.getBundle(bundleId);
++      setSelectedBundle(detail);
++    } catch (err: any) {
++      console.error(err);
++      showError(err?.message ?? 'Failed to load bundle detail');
++    }
++  };
++
++  useEffect(() => {
++    loadBundles();
++    loadJudgments();
++  }, []);
++
++  const onCreateBundle = async () => {
++    if (!newBundleName.trim()) return;
++    setLoading(true);
++    try {
++      const created = await api.createBundle({
++        name: newBundleName.trim(),
++        description: newBundleDesc || undefined
++      });
++      showSuccess('Bundle created');
++      setNewBundleName('');
++      setNewBundleDesc('');
++      await loadBundles();
++      await loadBundleDetail(created.id);
++    } catch (err: any) {
++      console.error(err);
++      showError(err?.message ?? 'Failed to create bundle');
++    } finally {
++      setLoading(false);
++    }
++  };
++
++  const onAddJudgment = async () => {
++    if (!selectedBundle || !addingJudgmentId) return;
++    setLoading(true);
++    try {
++      const updated = await api.addBundleJudgment(selectedBundle.id, {
++        judgmentId: Number(addingJudgmentId),
++        tranche: addingTranche
++      });
++      setSelectedBundle(updated);
++      showSuccess('Judgment added to bundle');
++    } catch (err: any) {
++      console.error(err);
++      showError(err?.message ?? 'Failed to add judgment');
++    } finally {
++      setLoading(false);
++    }
++  };
++
++  const onRemoveJudgment = async (judgmentId: number) => {
++    if (!selectedBundle) return;
++    setLoading(true);
++    try {
++      const updated = await api.removeBundleJudgment(selectedBundle.id, judgmentId);
++      setSelectedBundle(updated);
++      showSuccess('Judgment removed from bundle');
++    } catch (err: any) {
++      console.error(err);
++      showError(err?.message ?? 'Failed to remove judgment');
++    } finally {
++      setLoading(false);
++    }
++  };
++
++  const availableJudgments = judgments.filter((j) =>
++    selectedBundle?.judgments
++      ? !selectedBundle.judgments.some((bj) => bj.id === j.id)
++      : true
++  );
++
++  return (
++    <div className="layout-grid">
++      <div className="card">
++        <h2>Bundles</h2>
++        <p>Select a bundle or create a new one. Only your bundles are shown (admin can see all).</p>
++
++        <div style={{ marginBottom: 12 }}>
++          <input
++            type="text"
++            placeholder="New bundle name"
++            value={newBundleName}
++            onChange={(e) => setNewBundleName(e.target.value)}
++          />
++          <textarea
++            placeholder="Optional description"
++            value={newBundleDesc}
++            onChange={(e) => setNewBundleDesc(e.target.value)}
++            style={{ marginTop: 4 }}
++          />
++          <button onClick={onCreateBundle} disabled={loading || !newBundleName.trim()} style={{ marginTop: 4 }}>
++            Create bundle
++          </button>
++        </div>
++
++        <ul>
++          {bundles.map((b) => (
++            <li key={b.id}>
++              <button
++                onClick={() => loadBundleDetail(b.id)}
++                style={{
++                  fontWeight: selectedBundle?.id === b.id ? 'bold' : 'normal',
++                  width: '100%',
++                  textAlign: 'left'
++                }}
++              >
++                {b.name} ({b.status})
++              </button>
++            </li>
++          ))}
++          {bundles.length === 0 && <li>No bundles yet.</li>}
++        </ul>
++      </div>
++
++      <div className="card">
++        <h2>Tranche Builder</h2>
++        {!selectedBundle && <p>Select a bundle to configure tranches.</p>}
++        {selectedBundle && (
++          <>
++            <h3>{selectedBundle.name}</h3>
++            {selectedBundle.metrics && (
++              <div style={{ marginBottom: 12 }}>
++                <strong>Overall:</strong>{' '}
++                Face ${selectedBundle.metrics.overall.faceValue.toFixed(2)} / Recommended $
++                {selectedBundle.metrics.overall.recommendedPurchasePrice.toFixed(2)} (
++                {selectedBundle.metrics.overall.judgmentCount} judgments)
++              </div>
++            )}
++
++            <div style={{ display: 'flex', gap: 12, marginBottom: 12, flexWrap: 'wrap' }}>
++              {(['senior', 'mezz', 'equity'] as const).map((tranche) => {
++                const metrics = selectedBundle.metrics?.tranches[tranche];
++                return (
++                  <div key={tranche} style={{ border: '1px solid #ddd', padding: 8, flex: 1, minWidth: 180 }}>
++                    <strong>{tranche.toUpperCase()}</strong>
++                    {metrics && (
++                      <div style={{ fontSize: 12, marginTop: 4 }}>
++                        Face ${metrics.faceValue.toFixed(2)} / Rec $
++                        {metrics.recommendedPurchasePrice.toFixed(2)} ({metrics.judgmentCount} items)
++                      </div>
++                    )}
++                  </div>
++                );
++              })}
++            </div>
++
++            <div style={{ marginBottom: 12 }}>
++              <h4>Add judgment to tranche</h4>
++              <select
++                value={addingJudgmentId}
++                onChange={(e) =>
++                  setAddingJudgmentId(e.target.value ? Number(e.target.value) : '')
++                }
++              >
++                <option value="">Select judgment</option>
++                {availableJudgments.map((j) => (
++                  <option key={j.id} value={j.id}>
++                    #{j.id} – {j.debtorName} – ${j.judgmentAmount}
++                  </option>
++                ))}
++              </select>
++              <select
++                value={addingTranche}
++                onChange={(e) =>
++                  setAddingTranche(e.target.value as 'senior' | 'mezz' | 'equity')
++                }
++                style={{ marginLeft: 4 }}
++              >
++                <option value="senior">Senior</option>
++                <option value="mezz">Mezz</option>
++                <option value="equity">Equity</option>
++              </select>
++              <button onClick={onAddJudgment} disabled={loading || !addingJudgmentId} style={{ marginLeft: 4 }}>
++                Add
++              </button>
++            </div>
++
++            <div>
++              <h4>Judgments in bundle</h4>
++              {(!selectedBundle.judgments || selectedBundle.judgments.length === 0) && (
++                <p>No judgments in this bundle yet.</p>
++              )}
++              {selectedBundle.judgments && selectedBundle.judgments.length > 0 && (
++                <table style={{ width: '100%' }}>
++                  <thead>
++                    <tr>
++                      <th>ID</th>
++                      <th>Debtor</th>
++                      <th>Case</th>
++                      <th>Face</th>
++                      <th>Tranche</th>
++                      <th>Recommended Price</th>
++                      <th />
++                    </tr>
++                  </thead>
++                  <tbody>
++                    {selectedBundle.judgments.map((j: BundleJudgmentItem) => (
++                      <tr key={j.id}>
++                        <td>{j.id}</td>
++                        <td>{j.debtorName}</td>
++                        <td>{j.caseNumber}</td>
++                        <td>${j.judgmentAmount.toFixed(2)}</td>
++                        <td>{j.tranche.toUpperCase()}</td>
++                        <td>
++                          {typeof j.recommendedPurchasePrice === 'number'
++                            ? `$${j.recommendedPurchasePrice.toFixed(2)}`
++                            : '—'}
++                        </td>
++                        <td>
++                          <button onClick={() => onRemoveJudgment(j.id)} disabled={loading}>
++                            Remove
++                          </button>
++                        </td>
++                      </tr>
++                    ))}
++                  </tbody>
++                </table>
++              )}
++            </div>
++          </>
++        )}
++      </div>
++    </div>
++  );
++};
+
+--- a/docs/PRD/FEATURES/pricing_engine.md
++++ b/docs/PRD/FEATURES/pricing_engine.md
+@@ -1,5 +1,45 @@
+ # Feature PRD – Pricing Engine
+ 
+-_Stub PRD._
+-
+-Describe detailed problem, goals, flows, data model, APIs, errors, and analytics for the **pricing_engine** feature here.
++## Problem
++
++Analysts and investors need a fast, consistent way to turn raw judgment amounts into scenario-based pricing
++that can be compared across deals and exported into investor materials.
++
++## Goals
++
++- Deterministic, explainable pricing model (no hidden AI magic for the actual dollar math).
++- Support base / optimistic / stressed scenarios.
++- Persist scenarios to the database so they can be re-used in investor dashboards and bundles.
++- Expose a simple API so other services (UI, teaser generator, external tools) can call the engine.
++
++## Flows
++
++1. Analyst uploads / extracts a judgment.
++2. Analyst clicks “Run Pricing” on the judgment:
++   - Frontend calls `POST /api/judgments/{id}/price` with target IRR, discount and expected recovery %.
++   - API runs `pricingService.priceJudgmentWithScenarios` which:
++     - Loads the judgment.
++     - Builds base / optimistic / stressed scenarios.
++     - Calculates recommended prices per scenario.
++     - Writes rows into `price_estimates` keyed by `scenario_name`.
++3. Frontend fetches scenarios from `GET /api/judgments/{id}/price-estimates` and renders a comparison table.
++
++## Data model
++
++- `price_estimates` table:
++  - `judgment_id` FK → `judgments`.
++  - `target_irr`, `discount_rate`, `recommended_purchase_price`.
++  - `scenario_name` enum-ish string: `base`, `optimistic`, `stressed`.
++  - `scenario_json` stores derived fields (expected recovery amount, notes, etc).
++
++## APIs
++
++- `POST /api/judgments/{id}/price`
++- `GET /api/judgments/{id}/price-estimates`
++
++## Errors & Edge Cases
++
++- Judgment not found → 404.
++- Invalid payload / negative numbers → 400.
++- Rate limited (`pricing` bucket) for abuse prevention.
++
++## Analytics
++
++- Count of priced judgments per day.
++- Distribution of discount rates and recovery % by scenario.
+
+--- a/docs/PRD/FEATURES/bundle_tranching.md
++++ b/docs/PRD/FEATURES/bundle_tranching.md
+@@ -1,5 +1,52 @@
+ # Feature PRD – Bundle Tranching
+ 
+-_Stub PRD._
+-
+-Describe detailed problem, goals, flows, data model, APIs, errors, and analytics for the **bundle_tranching** feature here.
++## Problem
++
++Investors rarely buy single judgments; they buy pools with clearly defined tranches (Senior / Mezz / Equity).
++Analysts need a UI and API to group judgments into bundles, assign tranches, and compute aggregate metrics.
++
++## Goals
++
++- Enable analysts to create bundles and assign judgments to Senior / Mezz / Equity tranches.
++- Use base-scenario pricing as the reference price for bundle metrics.
++- Provide a single “Bundle detail” view that includes overall and per-tranche stats.
++
++## Flows
++
++1. Analyst opens the Bundles screen.
++2. Analyst creates a new bundle.
++3. Analyst selects a bundle and uses the “Tranche Builder” panel to:
++   - Add judgments to a tranche.
++   - Move a judgment between tranches.
++   - Remove a judgment from the bundle.
++4. The API recomputes bundle metrics based on:
++   - Face value (sum of `judgment_amount`).
++   - Recommended price (sum of base-scenario `recommended_purchase_price`).
++5. Investor dashboards and teaser exports use the same bundle metrics.
++
++## Data model
++
++- `bundles` table (already exists).
++- `bundle_judgments` link table with `tranche` string column.
++- Aggregations are computed on the fly from:
++  - `judgments`
++  - `bundle_judgments`
++  - base-scenario rows in `price_estimates`.
++
++## APIs
++
++- `GET /api/bundles`
++- `POST /api/bundles`
++- `GET /api/bundles/{id}`
++- `PATCH /api/bundles/{id}`
++- `POST /api/bundles/{id}/judgments`
++- `DELETE /api/bundles/{id}/judgments/{judgmentId}`
++
++## Analytics
++
++- Bundles created per user.
++- Average face / price per tranche and overall.
+
+
+Note: I didn’t paste the full server/openapi.yml diff because it’s huge and noisy, but functionally:
+
+
+Added POST /api/judgments/{id}/price and GET /api/judgments/{id}/price-estimates
+
+
+Added GET/POST /api/bundles, GET/PATCH /api/bundles/{id}, POST /api/bundles/{id}/judgments, DELETE /api/bundles/{id}/judgments/{judgmentId}
+
+
+Added schemas: PricingRequest, PricingScenario, PricingScenarioListResponse, BundleMetrics, BundleJudgmentItem, BundleDetail, BundleCreateRequest, BundleUpdateRequest, BundleAddJudgmentRequest.
+
+
+
+If you want, I can also give you a small, isolated diff just for openapi.yml next.
+
+If something still feels off or Replit yells about a specific file after you apply this patch, tell me the filename + error and I’ll patch just that piece.

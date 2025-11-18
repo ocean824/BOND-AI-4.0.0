@@ -1,0 +1,320 @@
+You are the same expert AI full-stack engineer, LLM integration specialist, and Replit app builder who just worked on the “Judgment Bond AI Platform” codebase.
+
+CONTEXT (DO NOT INVENT FILES)
+The current repo is the TypeScript / Node / React project with this structure:
+
+- app/
+  - src/
+    - App.tsx
+    - pages/
+      - DashboardPage.tsx
+      - JudgmentsPage.tsx
+      - BundlesPage.tsx
+      - InvestorDashboardPage.tsx
+    - components/
+      - AIOnboarderChat.tsx
+      - Layout.tsx
+      - NavBar.tsx
+      - ToastProvider.tsx
+    - lib/
+      - apiClient.ts
+      - auth.tsx
+      - types.ts
+- server/
+  - index.ts
+  - routes/
+    - auth.ts
+    - judgments.ts
+    - assistant.ts
+    - metrics.ts
+    - health.ts
+    - docs.ts
+    - teaser.ts
+    - index.ts
+  - services/
+    - authService.ts
+    - aiExtractionService.ts
+    - pricingService.ts
+    - assistantService.ts
+  - config/
+    - env.ts
+    - logger.ts
+  - middleware/
+    - auth.ts
+    - rateLimit.ts
+    - requestContext.ts
+  - errors/
+    - index.ts
+  - openapi.yml
+- db/
+  - schema.ts
+  - migrations/
+    - 001_init.sql
+- scripts/
+  - envDoctor.ts
+  - seed.ts   (uses admin@bondai.app / admin123 and seeds a sample bundle)
+  - smoke-test.ts
+  - dbReset.ts
+- docs/
+  - PRD/PRD_MASTER.md
+  - PRD/FEATURES/*.md
+  - ARCHITECTURE.md
+  - OPERATIONS.md
+  - SECURITY.md
+  - DEPLOY_REPLIT.md
+- drizzle.config.ts
+- package.json
+- .replit
+- replit.nix
+- .env.example
+
+Auth: JWT via fastify-jwt, admin seed user = admin@bondai.app / admin123  
+DB: PostgreSQL via Drizzle ORM with tables for users, judgments, recovery_scores, price_estimates, bundles, bundle_judgments, chat_sessions, chat_messages.  
+AI: aiExtractionService.ts already calls OpenAI (gpt-4o-mini) as a stub, with Claude stubbed out.  
+PDF: teaserRoutes in server/routes/teaser.ts uses pdfkit to generate a basic “bundle teaser” PDF.  
+
+GOAL
+Extend and harden the app with the following enhancements, WITHOUT breaking any existing behavior:
+
+1) Optimized Pricing Engine (multi-scenario & IRR-aware)
+2) Multi-bundle API + tranche builder UI
+3) Fully wired real OpenAI extraction flow
+4) Better-integrated teaser PDF using bundle metrics + tranches
+
+You must work ONLY within this repo structure and update actual existing files (or add new ones under appropriate folders).
+
+---
+
+TASK 1 – Optimize Pricing Engine
+
+Upgrade pricing from a simple deterministic calculation into a more flexible, scenario-driven engine while staying deterministic and TypeScript-typed.
+
+Requirements:
+
+- Keep the core computation in:
+  - server/services/pricingService.ts
+- Add:
+  - Support for multiple pricing scenarios per judgment:
+    - “base”, “optimistic”, “stressed”
+  - For each scenario, store:
+    - expectedRecoveryPct
+    - discountRate
+    - targetIRR
+    - recommendedPurchasePrice
+  - A clear explanation field in scenarioJson, e.g.:
+    - model: "scenario-linear"
+    - scenario: "base|optimistic|stressed"
+- DB changes:
+  - You may either:
+    - Extend price_estimates with a scenario_name column
+    - OR add a new table price_scenarios linked to price_estimates or judgments.
+  - Reflect changes in:
+    - db/schema.ts
+    - a new migration, e.g. db/migrations/002_price_scenarios.sql
+- API:
+  - Add endpoints (and document them in server/openapi.yml):
+    - POST /api/judgments/{id}/price
+      - Body: zod schema with targetIRR, expectedRecoveryPct, discountRate, and maybe scenarioName list.
+      - Response: array of scenarios with computed recommendedPurchasePrice and IRR info.
+    - GET /api/judgments/{id}/price-estimates
+      - Return persisted scenarios for that judgment.
+  - All routes:
+    - Use authGuard
+    - Return standardized error shape { code, message, details, requestId }
+
+- Frontend:
+  - In app/src/pages/JudgmentsPage.tsx OR a new pricing panel component:
+    - Add a simple UI to request pricing for a selected judgment and show the 3 scenarios (base/optimistic/stressed).
+    - Make it obvious this is NOT legal or investment advice.
+
+- Tests:
+  - Add unit tests for pricingService.ts covering:
+    - scenario calculations
+    - edge cases (0 or tiny judgmentAmount)
+  - Add an API test in tests/e2e for POST /api/judgments/{id}/price.
+
+---
+
+TASK 2 – Multi-Bundle API + Tranche Builder UI
+
+Turn bundles + bundle_judgments into a first-class feature.
+
+Backend:
+
+- Create a new server/routes/bundles.ts that provides:
+  - GET /api/bundles
+    - List bundles for the authenticated ownerId (admin = can see all or at least self-owned).
+  - GET /api/bundles/{id}
+    - Bundle detail + associated judgments + per-tranche breakdown.
+  - POST /api/bundles
+    - Create a new bundle (name, description).
+  - PATCH /api/bundles/{id}
+    - Update name, description, status (draft, open, closed, etc.).
+  - POST /api/bundles/{id}/judgments
+    - Body: { judgmentId: number, tranche: "senior" | "mezz" | "equity" }
+    - Adds a judgment to the bundle with the given tranche.
+  - DELETE /api/bundles/{id}/judgments/{judgmentId}
+    - Remove a judgment from the bundle.
+- All routes:
+  - Use authGuard
+  - Enforce ownership: only ownerId can mutate; admin can optionally override (briefly define the rule).
+  - Use zod for validation.
+  - Return proper error classes: NotFoundError, ValidationError, AuthError.
+
+- DB:
+  - Reuse existing bundles and bundle_judgments tables.
+  - You can enhance metricsJson or add optional derived metrics (e.g. totals per tranche) computed in queries instead of denormalizing.
+
+- Docs:
+  - Add all new endpoints to server/openapi.yml.
+  - Update docs/PRD/FEATURES/bundle_tranching.md with:
+    - Concrete user stories
+    - Data model references
+    - API list and errors.
+
+Frontend (Tranche Builder UI):
+
+- Update app/src/pages/BundlesPage.tsx into a useful bundle/tranche builder:
+  - Left pane:
+    - List of bundles (name, status, basic metrics).
+    - “Create bundle” button.
+  - Right pane:
+    - When a bundle is selected:
+      - Show judgments in that bundle grouped by tranche: Senior, Mezz, Equity.
+      - Show totals (face value + recommended purchase) per tranche and overall.
+      - Controls to:
+        - Add existing judgments to this bundle (display a dropdown or picker).
+        - Move a judgment between tranches (e.g. simple select).
+        - Remove a judgment from the bundle.
+- Use apiClient.ts to add:
+  - listBundles, getBundle, createBundle, updateBundle, addJudgmentToBundle, removeJudgmentFromBundle.
+
+- UX:
+  - Keep it minimal and Replit-friendly: no external heavy chart libs unless already present.
+  - Show clear empty states (“No bundles yet”, “No judgments in this tranche”).
+
+---
+
+TASK 3 – Integrate Real OpenAI Calls for Extraction
+
+Make aiExtractionService.ts fully use OpenAI in a robust, production-friendly way.
+
+Requirements:
+
+- Use OPENAI_API_KEY from env (already in config/env.ts).
+- In server/services/aiExtractionService.ts:
+  - Keep the dual-mode structure BUT:
+    - Implement a resilient GPT call:
+      - Respect model name via a constant (e.g. GPT_MODEL = 'gpt-4o-mini' or configurable).
+      - Handle:
+        - API errors
+        - Empty or invalid JSON responses
+      - Return a safe default structure if parsing fails (no crash).
+    - For Claude:
+      - Keep as an optional stub (since Anthropic key may be absent).
+      - If CLAUDE_API_KEY is not set, the Claude path is skipped without error.
+  - Maintain the “merge GPT vs Claude” resolution logic and confidence map.
+- Validation:
+  - Ensure final JudgmentExtractionResult always has:
+    - debtorName
+    - caseNumber
+    - court
+    - jurisdiction
+    - judgmentAmount
+    - judgmentDate
+    - confidence
+    - rawFields
+
+- Rate Limits:
+  - Keep using rateLimit(req, reply, 'aiExtraction') in judgments.ts.
+
+- Docs:
+  - Update docs/PRD/FEATURES/ai_extraction.md with:
+    - Real-model call behavior
+    - Failure modes
+    - Rate-limit notes.
+
+- Tests:
+  - Add unit tests that:
+    - Mock OpenAI client to return a valid JSON payload.
+    - Mock it to throw errors and assert we fall back to safe defaults (no crash).
+
+NOTE: Do NOT expose internal prompts or chain-of-thought to API consumers.
+
+---
+
+TASK 4 – Teaser PDF Uses Bundle + Tranche Data
+
+Enhance server/routes/teaser.ts and the DB queries so the PDF includes:
+
+- Per-tranche breakdown:
+  - Senior: count, face total, recommended purchase total.
+  - Mezz: same.
+  - Equity: same.
+- Overall summary:
+  - Total face value
+  - Total recommended purchase price
+  - Judgment count
+- A short text summary referencing how tranches differ (high-level, non-legal wording).
+
+Implementation:
+
+- Adjust the SQL query in teaser.ts to pull tranche from bundle_judgments.
+- Group results in TS (no need to alter schema).
+- Render in the PDF as distinct sections (“Senior Tranche”, “Mezzanine Tranche”, “Equity Tranche”).
+- Keep the disclaimer at the end (“not legal or investment advice”).
+
+---
+
+CROSS-CUTTING REQUIREMENTS
+
+1. OpenAPI
+   - Update server/openapi.yml for all new/changed endpoints:
+     - /api/judgments/{id}/price
+     - /api/judgments/{id}/price-estimates
+     - /api/bundles endpoints (list, get, create, update, add/remove judgment)
+   - All new endpoints should reference:
+     - Judgment
+     - Bundle
+     - Tranche
+     - PricingScenario (new schema)
+     - ErrorResponse
+
+2. Docs
+   - Update:
+     - docs/PRD/PRD_MASTER.md (mention pricing scenarios, bundle/tranche flows)
+     - docs/PRD/FEATURES/pricing_engine.md
+     - docs/PRD/FEATURES/bundle_tranching.md
+     - docs/ARCHITECTURE.md (new routes or services)
+   - Keep docs concise but concrete.
+
+3. Tests
+   - Ensure npm run test and npm run test:e2e still pass.
+   - Add or update tests:
+     - Unit: pricingService, aiExtractionService, any new bundle-related service helpers.
+     - E2E: at least:
+       - POST /api/judgments/{id}/price
+       - GET /api/bundles
+       - GET /api/bundles/{id}/teaser (smoke – 200 or 404 as appropriate).
+
+4. Replit Compatibility
+   - Do not change the existing scripts in package.json unless necessary.
+   - If you add new scripts, they must be compatible with Replit’s Node environment.
+   - After all changes, the following should still be the “happy path”:
+     - npm install
+     - npm run db:migrate
+     - npm run seed
+     - npm run dev
+
+---
+
+OUTPUT FORMAT
+
+1. Brief explanation of your approach and any assumptions.
+2. Then, for each file you change or create:
+   - Either a unified diff patch (preferred) OR full file content.
+   - Always include the file path relative to repo root.
+3. Summarize any new DB migrations and how to apply them.
+
+Do NOT invent new high-level architecture; extend and refine the existing one.
+Do NOT break existing endpoints or auth flows.
