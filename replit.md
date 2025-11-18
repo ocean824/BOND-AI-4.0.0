@@ -77,9 +77,18 @@ Preferred communication style: Simple, everyday language.
 
 ### Bundle & Tranche System
 - **Bundle Creation**: Users can create named investment bundles with descriptions
-- **Judgment Assignment**: Add judgments to bundles with tranche designation (senior, mezzanine, junior)
+- **Judgment Assignment**: Add judgments to bundles with tranche designation (senior, mezz, equity)
 - **Aggregation**: Bundles calculate total face value and recommended purchase amounts
 - **Removal**: Support for removing judgments from bundles
+- **Ownership Verification**: All bundle endpoints verify ownership to prevent unauthorized access (IDOR protection)
+
+### PDF Generation
+- **Investor Teaser Generation**: Automated creation of professional investor teaser PDFs for bundles
+- **Endpoint**: GET /api/teaser/:bundleId (requires authentication and bundle ownership)
+- **Content**: Bundle overview, executive summary with financial metrics, tranche breakdown table, judgment portfolio details, legal disclaimers
+- **Security**: Ownership verification prevents unauthorized access to sensitive investor data
+- **Implementation**: PDFKit library for PDF generation with proper stream handling
+- **Download**: Client-side blob download with Authorization bearer token authentication
 
 ## External Dependencies
 
@@ -106,6 +115,7 @@ Preferred communication style: Simple, everyday language.
   - `jsonwebtoken`: JWT token generation and verification
   - `express`: Web server framework
   - `zod`: Request validation schemas
+  - `pdfkit`: PDF generation library for investor teasers
 
 - **Development**:
   - `vite`: Frontend build tool and dev server
