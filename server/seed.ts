@@ -1,12 +1,12 @@
 import { db } from "./db";
-import { users, judgments, bundles, bundleJudgments } from "@shared/schema";
+import { users } from "@shared/schema";
 import bcrypt from "bcryptjs";
 import { eq } from "drizzle-orm";
 
 async function seed() {
   console.log("🌱 Seeding database...");
 
-  // Check if admin user already exists
+  // ===== ADMIN USER CREATION (REAL ACCOUNT ONLY) =====
   const [existingAdmin] = await db
     .select()
     .from(users)
@@ -34,101 +34,55 @@ async function seed() {
     console.log("✅ Admin user already exists:", adminUser.email);
   }
 
-  // Create sample judgments
-  const existingJudgments = await db
+  // ===== NO MOCK JUDGMENT DATA =====
+  // This application operates on REAL judgment data only.
+  // 
+  // Judgment records are created ONLY through:
+  // 1. User PDF uploads with AI extraction (real court documents)
+  // 2. Manual entry of verified judgment information
+  // 
+  // NEVER seed with fabricated judgment data in production or development.
+  // 
+  // For testing purposes ONLY, you may uncomment the section below and replace
+  // ALL placeholder values with REAL judgment data from actual court documents.
+  // This should ONLY be used for local development testing and MUST be commented
+  // out before any deployment.
+  
+  /*
+  // DEV-ONLY: Uncomment and replace with REAL judgment data for testing
+  const [existingJudgment] = await db
     .select()
     .from(judgments)
-    .where(eq(judgments.ownerId, adminUser.id));
+    .where(eq(judgments.ownerId, adminUser.id))
+    .limit(1);
 
-  if (existingJudgments.length === 0) {
-    console.log("Creating sample judgments...");
+  if (!existingJudgment) {
+    console.log("⚠️  DEV ONLY: Creating test judgment from REAL court document");
+    
+    // WARNING: Replace ALL fields below with actual values from a real judgment document
+    await db.insert(judgments).values({
+      ownerId: adminUser.id,
+      debtorName: "REPLACE_WITH_REAL_DEBTOR_NAME",
+      caseNumber: "REPLACE_WITH_REAL_CASE_NUMBER",
+      court: "REPLACE_WITH_REAL_COURT_NAME",
+      jurisdiction: "REPLACE_WITH_REAL_JURISDICTION",
+      judgmentAmount: "REPLACE_WITH_REAL_AMOUNT", // e.g. "125000.00"
+      judgmentDate: new Date("REPLACE_WITH_REAL_DATE"), // e.g. "2024-01-15"
+      status: "extracted",
+      notes: "REPLACE_WITH_REAL_NOTES",
+    });
 
-    const sampleJudgments = [
-      {
-        ownerId: adminUser.id,
-        debtorName: "Acme Corporation",
-        caseNumber: "CV-2024-001234",
-        court: "Superior Court of California",
-        jurisdiction: "Los Angeles County",
-        judgmentAmount: "125000.00",
-        judgmentDate: new Date("2024-01-15"),
-        status: "extracted",
-        notes: "Commercial debt case",
-      },
-      {
-        ownerId: adminUser.id,
-        debtorName: "Smith Enterprises LLC",
-        caseNumber: "CV-2024-005678",
-        court: "District Court of New York",
-        jurisdiction: "Manhattan",
-        judgmentAmount: "89500.00",
-        judgmentDate: new Date("2024-02-20"),
-        status: "extracted",
-        notes: "Contract dispute settlement",
-      },
-      {
-        ownerId: adminUser.id,
-        debtorName: "Johnson & Associates",
-        caseNumber: "CV-2024-009012",
-        court: "Circuit Court of Illinois",
-        jurisdiction: "Cook County",
-        judgmentAmount: "67250.00",
-        judgmentDate: new Date("2024-03-10"),
-        status: "extracted",
-        notes: "Breach of contract",
-      },
-    ];
-
-    const createdJudgments = await db
-      .insert(judgments)
-      .values(sampleJudgments)
-      .returning();
-
-    console.log(`✅ Created ${createdJudgments.length} sample judgments`);
-
-    // Create a sample bundle
-    console.log("Creating sample bundle...");
-
-    const [sampleBundle] = await db
-      .insert(bundles)
-      .values({
-        ownerId: adminUser.id,
-        name: "Q1 2025 Portfolio",
-        description: "First quarter investment bundle with diversified risk tranches",
-        status: "open",
-      })
-      .returning();
-
-    console.log("✅ Created sample bundle:", sampleBundle.name);
-
-    // Add judgments to bundle with different tranches
-    await db.insert(bundleJudgments).values([
-      {
-        bundleId: sampleBundle.id,
-        judgmentId: createdJudgments[0].id,
-        tranche: "senior",
-      },
-      {
-        bundleId: sampleBundle.id,
-        judgmentId: createdJudgments[1].id,
-        tranche: "mezz",
-      },
-      {
-        bundleId: sampleBundle.id,
-        judgmentId: createdJudgments[2].id,
-        tranche: "equity",
-      },
-    ]);
-
-    console.log("✅ Added judgments to bundle with tranche allocations");
-  } else {
-    console.log("✅ Sample data already exists");
+    console.log("✅ Test judgment created - ENSURE THIS IS FROM REAL DATA");
   }
+  */
 
   console.log("\n🎉 Seeding complete!");
   console.log("\n📧 Login credentials:");
   console.log("   Email: admin@bondai.app");
   console.log("   Password: admin123");
+  console.log("\n⚠️  IMPORTANT: This application uses REAL judgment data only.");
+  console.log("   Upload PDF court documents or manually enter verified information.");
+  console.log("   No mock/placeholder data is permitted.");
 }
 
 seed()
