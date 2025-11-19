@@ -2,9 +2,11 @@
 import fs from "fs/promises";
 import path from "path";
 import OpenAI from "openai";
-import pdfParse from "pdf-parse";
 import mammoth from "mammoth";
 import { config } from "../config";
+
+// pdf-parse doesn't have a default export in the types, use require
+const pdfParse = require("pdf-parse");
 
 const openai = config.openai.enabled
   ? new OpenAI({

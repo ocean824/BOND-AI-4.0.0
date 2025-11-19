@@ -5,11 +5,16 @@ import { authMiddleware, generateToken, type AuthRequest } from "./middleware/au
 import { extractJudgmentData, generateChatResponse } from "./services/aiExtractionService";
 import { buildMultiScenarioPricing } from "./services/pricingService";
 import { generateInvestorTeaserPDF } from "./services/pdfGenerationService";
+import { generateBondDraft } from "./services/bondAiService";
+import { summarizeBondDocumentFromFile } from "./services/bondDocumentAiService";
 import bcrypt from "bcryptjs";
 import { z } from "zod";
 import { sql } from "drizzle-orm";
 import { db } from "./db";
-import { judgments, bundleJudgments, pricingReadyJudgmentSchema, pricingInputSchema } from "@shared/schema";
+import { judgments, bundleJudgments, pricingReadyJudgmentSchema, pricingInputSchema, insertBondSchema } from "@shared/schema";
+import multer from "multer";
+import path from "path";
+import fs from "fs/promises";
 
 export async function registerRoutes(app: Express): Promise<Server> {
   // ===== AUTH ROUTES =====
@@ -640,6 +645,240 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Generate teaser PDF error:", error);
       res.status(500).json({ error: "Failed to generate teaser PDF" });
+    }
+  });
+
+  // ===== BOND ROUTES =====
+  // Set up multer for file uploads
+  const uploadsDir = path.join(process.cwd(), "uploads", "bond-documents");
+  
+  // Ensure uploads directory exists
+  await fs.mkdir(uploadsDir, { recursive: true });
+
+  const multerStorage = multer.diskStorage({
+    destination: async (req, file, cb) => {
+      cb(null, uploadsDir);
+    },
+    filename: (req, file, cb) => {
+      const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
+      cb(null, uniqueSuffix + "-" + file.originalname);
+    },
+  });
+
+  const upload = multer({
+    storage: multerStorage,
+    limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit
+    fileFilter: (req, file, cb) => {
+      const allowedMimes = [
+        "application/pdf",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      ];
+      if (allowedMimes.includes(file.mimetype)) {
+        cb(null, true);
+      } else {
+        cb(new Error("Only PDF and DOCX files are allowed"));
+      }
+    },
+  });
+
+  // Get all bonds for current user
+  app.get("/api/bonds", authMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const bondsList = await storage.getBonds(req.user!.id);
+      res.json(bondsList);
+    } catch (error) {
+      console.error("Get bonds error:", error);
+      res.status(500).json({ error: "Failed to get bonds" });
+    }
+  });
+
+  // Get single bond
+  app.get("/api/bonds/:id", authMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const bondId = parseInt(req.params.id);
+      const bond = await storage.getBond(bondId);
+
+      if (!bond) {
+        return res.status(404).json({ error: "Bond not found" });
+      }
+
+      // Verify ownership
+      if (bond.ownerId !== req.user!.id) {
+        return res.status(403).json({ error: "Forbidden" });
+      }
+
+      res.json(bond);
+    } catch (error) {
+      console.error("Get bond error:", error);
+      res.status(500).json({ error: "Failed to get bond" });
+    }
+  });
+
+  // Create new bond
+  app.post("/api/bonds", authMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const validation = insertBondSchema.safeParse({
+        ...req.body,
+        ownerId: req.user!.id,
+      });
+
+      if (!validation.success) {
+        return res.status(400).json({ 
+          error: "Invalid input", 
+          details: validation.error 
+        });
+      }
+
+      const bond = await storage.createBond(validation.data);
+      res.json(bond);
+    } catch (error) {
+      console.error("Create bond error:", error);
+      res.status(500).json({ error: "Failed to create bond" });
+    }
+  });
+
+  // Update bond
+  app.patch("/api/bonds/:id", authMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const bondId = parseInt(req.params.id);
+      const bond = await storage.getBond(bondId);
+
+      if (!bond) {
+        return res.status(404).json({ error: "Bond not found" });
+      }
+
+      // Verify ownership
+      if (bond.ownerId !== req.user!.id) {
+        return res.status(403).json({ error: "Forbidden" });
+      }
+
+      const updated = await storage.updateBond(bondId, req.body);
+      res.json(updated);
+    } catch (error) {
+      console.error("Update bond error:", error);
+      res.status(500).json({ error: "Failed to update bond" });
+    }
+  });
+
+  // Draft bond document using AI
+  app.post("/api/bonds/:id/draft", authMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const bondId = parseInt(req.params.id);
+      const bond = await storage.getBond(bondId);
+
+      if (!bond) {
+        return res.status(404).json({ error: "Bond not found" });
+      }
+
+      // Verify ownership
+      if (bond.ownerId !== req.user!.id) {
+        return res.status(403).json({ error: "Forbidden" });
+      }
+
+      const { purpose, style } = req.body;
+
+      const draftedDocument = await generateBondDraft(bond, { purpose, style });
+      res.json({ content: draftedDocument });
+    } catch (error) {
+      console.error("Draft bond document error:", error);
+      res.status(500).json({ error: "Failed to draft bond document" });
+    }
+  });
+
+  // Upload and process bond document
+  app.post(
+    "/api/bonds/:id/documents",
+    authMiddleware,
+    upload.single("file"),
+    async (req: AuthRequest, res) => {
+      try {
+        const bondId = parseInt(req.params.id);
+        const bond = await storage.getBond(bondId);
+
+        if (!bond) {
+          return res.status(404).json({ error: "Bond not found" });
+        }
+
+        // Verify ownership
+        if (bond.ownerId !== req.user!.id) {
+          return res.status(403).json({ error: "Forbidden" });
+        }
+
+        if (!req.file) {
+          return res.status(400).json({ error: "No file uploaded" });
+        }
+
+        const { kind = "supporting", description = "" } = req.body;
+
+        // Use AI to summarize and tag the document
+        let aiSummary = null;
+        let aiTags: string[] = [];
+        
+        try {
+          const result = await summarizeBondDocumentFromFile(req.file.path, req.file.mimetype);
+          if (result) {
+            aiSummary = result.summary;
+            aiTags = result.tags;
+          }
+        } catch (aiError) {
+          console.error("AI processing error:", aiError);
+          // Continue without AI features if they fail
+        }
+
+        // Create document record
+        const document = await storage.createBondDocument({
+          bondId,
+          ownerId: req.user!.id,
+          filename: req.file.originalname,
+          mimeType: req.file.mimetype,
+          sizeBytes: req.file.size,
+          storagePath: req.file.path,
+          kind,
+          description,
+          aiSummary,
+          tags: aiTags,
+        });
+
+        res.json(document);
+      } catch (error) {
+        console.error("Upload bond document error:", error);
+        res.status(500).json({ error: "Failed to upload bond document" });
+      }
+    }
+  );
+
+  // Get bond documents
+  app.get("/api/bonds/:id/documents", authMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const bondId = parseInt(req.params.id);
+      const bond = await storage.getBond(bondId);
+
+      if (!bond) {
+        return res.status(404).json({ error: "Bond not found" });
+      }
+
+      // Verify ownership
+      if (bond.ownerId !== req.user!.id) {
+        return res.status(403).json({ error: "Forbidden" });
+      }
+
+      const documents = await storage.getBondDocuments(bondId, req.user!.id);
+      res.json(documents);
+    } catch (error) {
+      console.error("Get bond documents error:", error);
+      res.status(500).json({ error: "Failed to get bond documents" });
+    }
+  });
+
+  // Search bond documents
+  app.get("/api/bonds/documents/search", authMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const query = req.query.q as string || "";
+      const documents = await storage.searchBondDocuments(req.user!.id, query);
+      res.json(documents);
+    } catch (error) {
+      console.error("Search bond documents error:", error);
+      res.status(500).json({ error: "Failed to search bond documents" });
     }
   });
 
