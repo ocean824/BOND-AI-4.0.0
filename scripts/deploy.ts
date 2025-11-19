@@ -1,7 +1,9 @@
 #!/usr/bin/env tsx
 import { migrate } from "drizzle-orm/neon-serverless/migrator";
 import { db } from "../server/db";
-import { sql } from "drizzle-orm";
+import { sql, eq } from "drizzle-orm";
+import { users } from "../shared/schema";
+import bcrypt from "bcryptjs";
 
 /**
  * Pre-deployment script that runs migrations and validates database state
@@ -129,8 +131,40 @@ async function deploy() {
     console.log("ℹ️  Development environment - real data policy noted (not enforced)\n");
   }
 
-  console.log("🎉 Deployment preparation complete!");
+  // Step 5: Ensure admin user exists
+  console.log("5️⃣ Ensuring admin user exists...");
+  try {
+    const [existingAdmin] = await db
+      .select()
+      .from(users)
+      .where(eq(users.email, "admin@bondai.app"));
+
+    if (!existingAdmin) {
+      console.log("   Creating admin user...");
+      const hashedPassword = await bcrypt.hash("admin123", 10);
+      
+      const [adminUser] = await db
+        .insert(users)
+        .values({
+          email: "admin@bondai.app",
+          password: hashedPassword,
+          name: "Admin User",
+          role: "admin",
+        })
+        .returning();
+
+      console.log("   ✅ Admin user created:", adminUser.email);
+    } else {
+      console.log("   ✅ Admin user already exists:", existingAdmin.email);
+    }
+  } catch (error) {
+    console.error("❌ Admin user creation failed:", error);
+    process.exit(1);
+  }
+
+  console.log("\n🎉 Deployment preparation complete!");
   console.log("   Database schema is up-to-date and validated");
+  console.log("   Admin user is configured");
   console.log("   Safe to proceed with application deployment\n");
   
   process.exit(0);

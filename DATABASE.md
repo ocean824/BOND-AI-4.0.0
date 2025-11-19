@@ -71,7 +71,8 @@ This script will:
 2. ✅ Run all pending migrations
 3. ✅ Validate critical tables exist
 4. ✅ Check real data policy compliance
-5. ✅ Confirm safe deployment state
+5. ✅ Ensure admin user exists (auto-creates if missing)
+6. ✅ Confirm safe deployment state
 
 ### 4. Production Deployment
 
