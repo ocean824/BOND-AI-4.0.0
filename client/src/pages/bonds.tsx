@@ -1,7 +1,7 @@
 // client/src/pages/bonds.tsx
 import { useEffect, useState } from "react";
 import { useAuth } from "@/lib/auth";
-import { useToast } from "@/components/ui/use-toast";
+import { useToast } from "@/hooks/use-toast";
 import {
   Card,
   CardHeader,

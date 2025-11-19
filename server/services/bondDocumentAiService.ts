@@ -5,9 +5,6 @@ import OpenAI from "openai";
 import mammoth from "mammoth";
 import { config } from "../config";
 
-// pdf-parse doesn't have a default export in the types, use require
-const pdfParse = require("pdf-parse");
-
 const openai = config.openai.enabled
   ? new OpenAI({
       baseURL: config.openai.baseUrl,
@@ -25,6 +22,8 @@ async function extractTextFromFile(filePath: string, mimeType: string): Promise<
   const buffer = await fs.readFile(resolved);
 
   if (mimeType === "application/pdf" || filePath.toLowerCase().endsWith(".pdf")) {
+    // Dynamic import for pdf-parse since it doesn't have proper ESM exports
+    const pdfParse = (await import("pdf-parse")).default;
     const data = await pdfParse(buffer);
     return data.text || "";
   }
