@@ -151,7 +151,7 @@ export default function InvestorDashboardPage() {
                         Face Value
                       </Label>
                       <p className="text-2xl font-bold font-mono" data-testid={`${tranche}-face-value`}>
-                        ${data.faceValue.toLocaleString()}
+                        ${(data.faceValue || 0).toLocaleString()}
                       </p>
                     </div>
                     <div className="space-y-1">
@@ -159,16 +159,19 @@ export default function InvestorDashboardPage() {
                         Est. Purchase Price
                       </Label>
                       <p className="text-2xl font-bold font-mono" data-testid={`${tranche}-purchase`}>
-                        ${data.recommendedPurchase.toLocaleString()}
+                        {data.recommendedPurchase !== null && data.recommendedPurchase !== undefined 
+                          ? `$${data.recommendedPurchase.toLocaleString()}`
+                          : <span className="text-muted-foreground text-sm">No pricing data</span>
+                        }
                       </p>
                     </div>
                     <div className="pt-2 border-t">
                       <div className="flex items-center justify-between">
                         <Label className="text-xs text-muted-foreground">Discount</Label>
                         <p className="text-sm font-semibold">
-                          {data.faceValue > 0
+                          {data.faceValue > 0 && data.recommendedPurchase !== null && data.recommendedPurchase !== undefined
                             ? (((data.faceValue - data.recommendedPurchase) / data.faceValue) * 100).toFixed(1)
-                            : 0}%
+                            : "N/A"}%
                         </p>
                       </div>
                     </div>
