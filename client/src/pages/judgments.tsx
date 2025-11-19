@@ -11,6 +11,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
 import { Upload, FileText, DollarSign, TrendingUp, Shield, Plus } from "lucide-react";
+import { JudgmentDocDropzone } from "@/components/judgment-doc-dropzone";
 import type { Judgment, PricingScenario } from "@shared/schema";
 
 export default function JudgmentsPage() {
@@ -104,6 +105,20 @@ export default function JudgmentsPage() {
               </CardHeader>
               <form onSubmit={handleUpload}>
                 <CardContent className="space-y-4">
+                  <JudgmentDocDropzone
+                    onExtract={(data) =>
+                      setUploadForm((prev) => ({
+                        ...prev,
+                        debtorName: data.debtorName ?? prev.debtorName,
+                        caseNumber: data.caseNumber ?? prev.caseNumber,
+                        judgmentAmount:
+                          data.judgmentAmount != null
+                            ? String(data.judgmentAmount)
+                            : prev.judgmentAmount,
+                        notes: data.notes ?? prev.notes,
+                      }))
+                    }
+                  />
                   <div className="space-y-2">
                     <Label htmlFor="debtorName">Debtor Name</Label>
                     <Input
