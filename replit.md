@@ -2,9 +2,9 @@
 
 ## Overview
 
-The Judgment Bond AI Platform is a financial/legal technology application that enables AI-powered judgment debt underwriting and bond packaging for investors. The system allows users to upload judgment documents, automatically extract structured data using AI, generate multi-scenario pricing estimates, create investment bundles with tranche structures, and access comprehensive investor metrics dashboards.
+The Judgment Bond AI Platform is a financial/legal technology application that enables AI-powered judgment debt underwriting and bond packaging for investors. The system allows users to upload judgment documents, automatically extract structured data using AI, generate multi-scenario pricing estimates, create investment bundles with tranche structures, manage bond instruments with AI-assisted document drafting, and access comprehensive investor metrics dashboards.
 
-The platform is built as a full-stack TypeScript application with a React frontend, Express backend, PostgreSQL database (via Drizzle ORM), and OpenAI integration for document extraction and conversational assistance.
+The platform is built as a full-stack TypeScript application with a React frontend, Express backend, PostgreSQL database (via Drizzle ORM), and OpenAI integration for document extraction, bond document drafting, document summarization, and conversational assistance.
 
 ## User Preferences
 
@@ -50,7 +50,7 @@ For development testing, real judgment data from actual court documents must be 
 - **Routing**: Wouter for lightweight client-side routing
 - **Authentication**: Context-based auth provider with JWT token storage in localStorage
 - **Component Structure**: 
-  - Pages for major views (Dashboard, Judgments, Bundles, Investor Dashboard)
+  - Pages for major views (Dashboard, Judgments, Bundles, Bonds, Investor Dashboard)
   - Reusable UI components in `/components/ui`
   - AI chat assistant as a persistent overlay component
   - Sidebar navigation with role-based menu items
@@ -74,6 +74,8 @@ For development testing, real judgment data from actual court documents must be 
   - Bundles for grouping judgments into investment packages
   - Bundle-judgment many-to-many relationship with tranche assignments
   - Price estimates linked to judgments with scenario-based modeling
+  - Bonds with financial instrument details (CUSIP, ISIN, coupon, maturity, governing law)
+  - Bond documents with AI-powered summarization and tagging (PDF/DOCX support)
   - Chat sessions and messages for AI assistant conversations
   - Recovery scores for AI-based judgment assessment
 - **Migrations**: SQL-based migrations in `/db/migrations` directory with Drizzle Kit tooling
@@ -89,11 +91,14 @@ For development testing, real judgment data from actual court documents must be 
 
 ### AI Integration
 - **Provider**: OpenAI API (via Replit AI Integrations service)
-- **Model**: GPT-5 for both extraction and chat capabilities
-- **Document Extraction**: Structured data extraction from legal judgment documents with JSON output format
+- **Model**: GPT-5 for extraction, chat, bond drafting, and document summarization
+- **Judgment Extraction**: Structured data extraction from legal judgment documents with JSON output format
+- **Bond Document Drafting**: AI-assisted generation of bond term sheets, indenture outlines, and summaries using only real bond data
+- **Document Summarization**: Automatic summarization and tag extraction for uploaded bond documents (PDF/DOCX)
 - **AI Assistant**: Conversational interface for user onboarding and guidance
-- **Response Format**: JSON mode for extraction to ensure parseable output
+- **Response Format**: JSON mode for extraction and document analysis to ensure parseable output
 - **Confidence Scoring**: AI provides confidence ratings for extracted data
+- **Real Data Policy**: AI services operate exclusively on real data, never fabricating legal parties, covenants, or financial terms
 
 ### Pricing Engine
 - **Multi-Scenario Modeling**: Generates base, optimistic, and stressed pricing scenarios
@@ -111,6 +116,17 @@ For development testing, real judgment data from actual court documents must be 
 - **Aggregation**: Bundles calculate total face value and recommended purchase amounts
 - **Removal**: Support for removing judgments from bundles
 - **Ownership Verification**: All bundle endpoints verify ownership to prevent unauthorized access (IDOR protection)
+
+### Bond Management System
+- **Bond Creation**: Users can create and manage bond instruments with comprehensive metadata
+- **Bond Fields**: Name, CUSIP, ISIN, ticker, face value, currency, coupon rate/type, maturity/issue dates, jurisdiction, governing law, status
+- **AI Document Drafting**: GPT-5 powered generation of bond term sheets, indenture outlines, and summaries based on real bond data
+- **Document Upload**: Support for PDF and DOCX files with automatic text extraction
+- **AI Document Processing**: Automatic summarization and tag extraction for uploaded bond documents using GPT-5
+- **Document Types**: Template documents (AI-generated) and supporting documents (user-uploaded)
+- **File Storage**: Multer-based file upload with organized storage in uploads/bond-documents
+- **Search**: Document search capabilities across bond document library
+- **Ownership Verification**: All bond endpoints verify ownership to prevent unauthorized access (IDOR protection)
 
 ### PDF Generation
 - **Investor Teaser Generation**: Automated creation of professional investor teaser PDFs for bundles
