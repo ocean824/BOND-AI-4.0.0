@@ -21,36 +21,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const userToken = localStorage.getItem("auth_token");
     
     if (adminToken) {
-      // Verify admin token and create admin user object
-      fetch("/api/admin/verify", {
+      // Verify admin token and get real admin user
+      fetch("/api/auth/me", {
         headers: { Authorization: `Bearer ${adminToken}` },
       })
-        .then((res) => {
-          if (res.ok) {
-            // Create pseudo-user object for admin with full access
-            setUser({
-              id: -1,
-              email: "admin",
-              name: "Administrator",
-              role: "admin",
-              password: "",
-              createdAt: new Date(),
-            });
+        .then((res) => res.json())
+        .then((data) => {
+          if (data.user && data.user.role === "admin") {
+            setUser(data.user);
           } else {
             localStorage.removeItem("admin_token");
             // Fall back to regular user token if admin token is invalid
-            return userToken ? fetch("/api/auth/me", {
-              headers: { Authorization: `Bearer ${userToken}` },
-            }) : null;
+            if (userToken) {
+              return fetch("/api/auth/me", {
+                headers: { Authorization: `Bearer ${userToken}` },
+              }).then((res) => res.json());
+            }
           }
-        })
-        .then((res) => {
-          if (res) {
-            return res.json();
-          }
+          return data;
         })
         .then((data) => {
-          if (data?.user) {
+          if (data?.user && !data.user.role) {
             setUser(data.user);
           } else if (data && !data.user) {
             localStorage.removeItem("auth_token");

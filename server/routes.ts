@@ -915,14 +915,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Invalid admin credentials" });
       }
 
-      const token = generateToken({ 
-        id: -1, 
-        email: "admin", 
-        name: "Administrator", 
-        role: "admin",
-        password: "",
-        createdAt: new Date()
-      });
+      // Find the actual admin user in the database
+      const adminUser = await storage.getUserByEmail("admin@bondai.app");
+      
+      if (!adminUser) {
+        console.error("Admin user not found in database - run seed script");
+        return res.status(503).json({ message: "Admin user not configured" });
+      }
+
+      const token = generateToken(adminUser);
       res.json({ token });
     } catch (error) {
       console.error("Admin login error:", error);
