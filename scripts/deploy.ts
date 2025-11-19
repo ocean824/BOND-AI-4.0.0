@@ -87,7 +87,7 @@ async function deploy() {
           WHERE LOWER(${sql.raw(check.column)}::text) LIKE ${likePattern}
         `);
         
-        const count = parseInt(result.rows[0]?.count || '0');
+        const count = parseInt(String(result.rows[0]?.count || '0'));
         
         if (count > 0) {
           console.error(`   ❌ Found ${count} records in ${check.table}.${check.column} matching mock pattern: "${pattern}"`);
