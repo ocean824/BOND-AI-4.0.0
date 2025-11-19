@@ -14,6 +14,8 @@ import JudgmentsPage from "@/pages/judgments";
 import BundlesPage from "@/pages/bundles";
 import BondsPage from "@/pages/bonds";
 import InvestorDashboardPage from "@/pages/investor-dashboard";
+import AdminLoginPage from "@/pages/admin-login";
+import AdminPanelPage from "@/pages/admin-panel";
 import NotFound from "@/pages/not-found";
 
 function AuthenticatedLayout({ children }: { children: React.ReactNode }) {
@@ -47,6 +49,7 @@ function Router() {
   if (!user) {
     return (
       <Switch>
+        <Route path="/admin/login" component={AdminLoginPage} />
         <Route path="/register" component={RegisterPage} />
         <Route path="/" component={LoginPage} />
         <Route component={LoginPage} />
@@ -57,6 +60,8 @@ function Router() {
   return (
     <AuthenticatedLayout>
       <Switch>
+        <Route path="/admin/login" component={AdminLoginPage} />
+        <Route path="/admin" component={AdminPanelPage} />
         <Route path="/" component={HomePage} />
         <Route path="/judgments" component={JudgmentsPage} />
         <Route path="/bundles" component={BundlesPage} />

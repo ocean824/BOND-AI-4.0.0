@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useLocation } from "wouter";
+import { Link, useLocation } from "wouter";
 import { useAuth } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -119,6 +119,15 @@ export default function LoginPage() {
           <br />
           Not legal or investment advice.
         </p>
+
+        <div className="flex justify-center mt-4">
+          <Link href="/admin/login" data-testid="link-admin">
+            <span className="flex items-center gap-2 text-xs text-muted-foreground hover-elevate active-elevate-2 px-3 py-2 rounded-md transition-colors cursor-pointer">
+              <Shield className="w-3 h-3" />
+              Admin Access
+            </span>
+          </Link>
+        </div>
       </div>
     </div>
   );

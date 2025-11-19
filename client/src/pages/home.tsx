@@ -1,7 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { FileText, Package, TrendingUp, DollarSign } from "lucide-react";
+import { FileText, Package, TrendingUp, DollarSign, Shield } from "lucide-react";
+import { Link } from "wouter";
 import type { InvestorMetrics } from "@shared/schema";
 
 export default function HomePage() {
@@ -165,6 +166,15 @@ export default function HomePage() {
           </p>
         </CardContent>
       </Card>
+
+      <div className="flex justify-center">
+        <Link href="/admin/login" data-testid="link-admin">
+          <span className="flex items-center gap-2 text-xs text-muted-foreground hover-elevate active-elevate-2 px-3 py-2 rounded-md transition-colors cursor-pointer">
+            <Shield className="w-3 h-3" />
+            Admin Access
+          </span>
+        </Link>
+      </div>
     </div>
   );
 }

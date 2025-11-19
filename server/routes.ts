@@ -1,7 +1,7 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { authMiddleware, generateToken, type AuthRequest } from "./middleware/auth";
+import { authMiddleware, generateToken, verifyToken, type AuthRequest } from "./middleware/auth";
 import { extractJudgmentData, generateChatResponse } from "./services/aiExtractionService";
 import { buildMultiScenarioPricing } from "./services/pricingService";
 import { generateInvestorTeaserPDF } from "./services/pdfGenerationService";
@@ -879,6 +879,101 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Search bond documents error:", error);
       res.status(500).json({ error: "Failed to search bond documents" });
+    }
+  });
+
+  // ===== ADMIN ROUTES =====
+  const adminLoginSchema = z.object({
+    username: z.string().min(1),
+    password: z.string().min(1),
+  });
+
+  app.post("/api/admin/login", async (req, res) => {
+    try {
+      const validation = adminLoginSchema.safeParse(req.body);
+      if (!validation.success) {
+        return res.status(400).json({ message: "Invalid input" });
+      }
+
+      const { username, password } = validation.data;
+      
+      const adminUsername = process.env.ADMIN_USERNAME;
+      const adminPassword = process.env.ADMIN_PASSWORD;
+
+      if (!adminUsername || !adminPassword) {
+        console.error("Admin credentials not configured");
+        return res.status(503).json({ message: "Admin access not configured" });
+      }
+
+      if (username !== adminUsername || password !== adminPassword) {
+        return res.status(401).json({ message: "Invalid admin credentials" });
+      }
+
+      const token = generateToken({ 
+        id: -1, 
+        email: "admin", 
+        name: "Administrator", 
+        role: "admin",
+        password: "",
+        createdAt: new Date()
+      });
+      res.json({ token });
+    } catch (error) {
+      console.error("Admin login error:", error);
+      res.status(500).json({ message: "Authentication failed" });
+    }
+  });
+
+  const adminAuthMiddleware = (req: AuthRequest, res: any, next: any) => {
+    try {
+      const authHeader = req.headers.authorization;
+      if (!authHeader?.startsWith("Bearer ")) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+
+      const token = authHeader.substring(7);
+      const decoded = verifyToken(token);
+      
+      if (!decoded) {
+        return res.status(401).json({ error: "Invalid token" });
+      }
+      
+      if (decoded.role !== "admin") {
+        return res.status(403).json({ error: "Forbidden - Admin access required" });
+      }
+
+      req.user = decoded;
+      next();
+    } catch (error: any) {
+      console.error("Admin auth error:", error.message);
+      res.status(401).json({ error: "Invalid token" });
+    }
+  };
+
+  app.get("/api/admin/verify", adminAuthMiddleware, async (req: AuthRequest, res) => {
+    res.json({ valid: true });
+  });
+
+  app.get("/api/admin/stats", adminAuthMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const [usersResult, judgmentsResult, bundlesResult, bondsResult, bondDocumentsResult] = await Promise.all([
+        db.execute(sql`SELECT COUNT(*) as count FROM users`),
+        db.execute(sql`SELECT COUNT(*) as count FROM judgments`),
+        db.execute(sql`SELECT COUNT(*) as count FROM bundles`),
+        db.execute(sql`SELECT COUNT(*) as count FROM bonds`),
+        db.execute(sql`SELECT COUNT(*) as count FROM bond_documents`),
+      ]);
+
+      res.json({
+        totalUsers: parseInt(usersResult.rows[0]?.count as string || "0"),
+        totalJudgments: parseInt(judgmentsResult.rows[0]?.count as string || "0"),
+        totalBundles: parseInt(bundlesResult.rows[0]?.count as string || "0"),
+        totalBonds: parseInt(bondsResult.rows[0]?.count as string || "0"),
+        totalBondDocuments: parseInt(bondDocumentsResult.rows[0]?.count as string || "0"),
+      });
+    } catch (error) {
+      console.error("Get admin stats error:", error);
+      res.status(500).json({ error: "Failed to get statistics" });
     }
   });
 
