@@ -162,9 +162,41 @@ async function deploy() {
     process.exit(1);
   }
 
+  // Step 6: Ensure test user exists
+  console.log("6️⃣ Ensuring test user exists...");
+  try {
+    const [existingTestUser] = await db
+      .select()
+      .from(users)
+      .where(eq(users.email, "test@bondai.app"));
+
+    if (!existingTestUser) {
+      console.log("   Creating test user...");
+      const hashedPassword = await bcrypt.hash("Test2024!", 10);
+      
+      const [testUser] = await db
+        .insert(users)
+        .values({
+          email: "test@bondai.app",
+          password: hashedPassword,
+          name: "Test User",
+          role: "analyst",
+        })
+        .returning();
+
+      console.log("   ✅ Test user created:", testUser.email);
+    } else {
+      console.log("   ✅ Test user already exists:", existingTestUser.email);
+    }
+  } catch (error) {
+    console.error("❌ Test user creation failed:", error);
+    process.exit(1);
+  }
+
   console.log("\n🎉 Deployment preparation complete!");
   console.log("   Database schema is up-to-date and validated");
   console.log("   Admin user is configured");
+  console.log("   Test user is configured");
   console.log("   Safe to proceed with application deployment\n");
   
   process.exit(0);
