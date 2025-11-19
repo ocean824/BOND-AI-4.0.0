@@ -14,7 +14,8 @@ export async function apiRequest(
 ): Promise<Response> {
   const headers: Record<string, string> = data ? { "Content-Type": "application/json" } : {};
   
-  const token = localStorage.getItem("auth_token");
+  // Check for admin token first, then regular user token
+  const token = localStorage.getItem("admin_token") || localStorage.getItem("auth_token");
   if (token) {
     headers["Authorization"] = `Bearer ${token}`;
   }
@@ -38,7 +39,8 @@ export const getQueryFn: <T>(options: {
   async ({ queryKey }) => {
     const headers: Record<string, string> = {};
     
-    const token = localStorage.getItem("auth_token");
+    // Check for admin token first, then regular user token
+    const token = localStorage.getItem("admin_token") || localStorage.getItem("auth_token");
     if (token) {
       headers["Authorization"] = `Bearer ${token}`;
     }

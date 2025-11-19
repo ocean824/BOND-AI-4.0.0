@@ -107,7 +107,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ===== JUDGMENT ROUTES =====
   app.get("/api/judgments", authMiddleware, async (req: AuthRequest, res) => {
     try {
-      const judgmentsList = await storage.getJudgments(req.user!.id);
+      // Admin sees all judgments, regular users see only their own
+      const ownerId = req.user!.role === "admin" ? undefined : req.user!.id;
+      const judgmentsList = await storage.getJudgments(ownerId);
       res.json(judgmentsList);
     } catch (error) {
       console.error("Get judgments error:", error);
@@ -299,7 +301,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ===== BUNDLE ROUTES =====
   app.get("/api/bundles", authMiddleware, async (req: AuthRequest, res) => {
     try {
-      const bundlesList = await storage.getBundles(req.user!.id);
+      // Admin sees all bundles, regular users see only their own
+      const ownerId = req.user!.role === "admin" ? undefined : req.user!.id;
+      const bundlesList = await storage.getBundles(ownerId);
       res.json(bundlesList);
     } catch (error) {
       console.error("Get bundles error:", error);
@@ -316,8 +320,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ error: "Bundle not found" });
       }
 
-      // Verify ownership
-      if (bundle.ownerId !== req.user!.id) {
+      // Verify ownership (admin bypass)
+      if (bundle.ownerId !== req.user!.id && req.user!.role !== "admin") {
         return res.status(403).json({ error: "Forbidden - You do not have access to this bundle" });
       }
 
@@ -370,7 +374,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!bundle) {
         return res.status(404).json({ error: "Bundle not found" });
       }
-      if (bundle.ownerId !== req.user!.id) {
+      if (bundle.ownerId !== req.user!.id && req.user!.role !== "admin") {
         return res.status(403).json({ error: "Forbidden - You do not have access to this bundle" });
       }
 
@@ -397,7 +401,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!bundle) {
         return res.status(404).json({ error: "Bundle not found" });
       }
-      if (bundle.ownerId !== req.user!.id) {
+      if (bundle.ownerId !== req.user!.id && req.user!.role !== "admin") {
         return res.status(403).json({ error: "Forbidden - You do not have access to this bundle" });
       }
 
@@ -555,8 +559,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ error: "Bundle not found" });
       }
 
-      // Verify ownership - prevent unauthorized access to other users' bundles
-      if (bundle.ownerId !== req.user!.id) {
+      // Verify ownership - prevent unauthorized access to other users' bundles (admin bypass)
+      if (bundle.ownerId !== req.user!.id && req.user!.role !== "admin") {
         return res.status(403).json({ error: "Forbidden - You do not have access to this bundle" });
       }
 
@@ -684,7 +688,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Get all bonds for current user
   app.get("/api/bonds", authMiddleware, async (req: AuthRequest, res) => {
     try {
-      const bondsList = await storage.getBonds(req.user!.id);
+      // Admin sees all bonds, regular users see only their own
+      const ownerId = req.user!.role === "admin" ? undefined : req.user!.id;
+      const bondsList = await storage.getBonds(ownerId);
       res.json(bondsList);
     } catch (error) {
       console.error("Get bonds error:", error);
@@ -702,8 +708,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ error: "Bond not found" });
       }
 
-      // Verify ownership
-      if (bond.ownerId !== req.user!.id) {
+      // Verify ownership (admin bypass)
+      if (bond.ownerId !== req.user!.id && req.user!.role !== "admin") {
         return res.status(403).json({ error: "Forbidden" });
       }
 
@@ -747,8 +753,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ error: "Bond not found" });
       }
 
-      // Verify ownership
-      if (bond.ownerId !== req.user!.id) {
+      // Verify ownership (admin bypass)
+      if (bond.ownerId !== req.user!.id && req.user!.role !== "admin") {
         return res.status(403).json({ error: "Forbidden" });
       }
 
@@ -770,8 +776,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ error: "Bond not found" });
       }
 
-      // Verify ownership
-      if (bond.ownerId !== req.user!.id) {
+      // Verify ownership (admin bypass)
+      if (bond.ownerId !== req.user!.id && req.user!.role !== "admin") {
         return res.status(403).json({ error: "Forbidden" });
       }
 
@@ -799,8 +805,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return res.status(404).json({ error: "Bond not found" });
         }
 
-        // Verify ownership
-        if (bond.ownerId !== req.user!.id) {
+        // Verify ownership (admin bypass)
+        if (bond.ownerId !== req.user!.id && req.user!.role !== "admin") {
           return res.status(403).json({ error: "Forbidden" });
         }
 
@@ -857,8 +863,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ error: "Bond not found" });
       }
 
-      // Verify ownership
-      if (bond.ownerId !== req.user!.id) {
+      // Verify ownership (admin bypass)
+      if (bond.ownerId !== req.user!.id && req.user!.role !== "admin") {
         return res.status(403).json({ error: "Forbidden" });
       }
 

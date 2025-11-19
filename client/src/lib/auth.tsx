@@ -16,10 +16,56 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    const token = localStorage.getItem("auth_token");
-    if (token) {
+    // Check for admin token first, then regular user token
+    const adminToken = localStorage.getItem("admin_token");
+    const userToken = localStorage.getItem("auth_token");
+    
+    if (adminToken) {
+      // Verify admin token and create admin user object
+      fetch("/api/admin/verify", {
+        headers: { Authorization: `Bearer ${adminToken}` },
+      })
+        .then((res) => {
+          if (res.ok) {
+            // Create pseudo-user object for admin with full access
+            setUser({
+              id: -1,
+              email: "admin",
+              name: "Administrator",
+              role: "admin",
+              password: "",
+              createdAt: new Date(),
+            });
+          } else {
+            localStorage.removeItem("admin_token");
+            // Fall back to regular user token if admin token is invalid
+            return userToken ? fetch("/api/auth/me", {
+              headers: { Authorization: `Bearer ${userToken}` },
+            }) : null;
+          }
+        })
+        .then((res) => {
+          if (res) {
+            return res.json();
+          }
+        })
+        .then((data) => {
+          if (data?.user) {
+            setUser(data.user);
+          } else if (data && !data.user) {
+            localStorage.removeItem("auth_token");
+          }
+        })
+        .catch(() => {
+          localStorage.removeItem("admin_token");
+          localStorage.removeItem("auth_token");
+        })
+        .finally(() => {
+          setIsLoading(false);
+        });
+    } else if (userToken) {
       fetch("/api/auth/me", {
-        headers: { Authorization: `Bearer ${token}` },
+        headers: { Authorization: `Bearer ${userToken}` },
       })
         .then((res) => res.json())
         .then((data) => {
@@ -76,6 +122,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const logout = () => {
     localStorage.removeItem("auth_token");
+    localStorage.removeItem("admin_token");
     setUser(null);
   };
 

@@ -38,13 +38,13 @@ export interface IStorage {
   createUser(user: InsertUser): Promise<User>;
   
   // Judgments
-  getJudgments(ownerId: number): Promise<Judgment[]>;
+  getJudgments(ownerId?: number): Promise<Judgment[]>;
   getJudgment(id: number): Promise<Judgment | undefined>;
   createJudgment(judgment: InsertJudgment): Promise<Judgment>;
   updateJudgment(id: number, data: Partial<InsertJudgment>): Promise<Judgment>;
   
   // Bundles
-  getBundles(ownerId: number): Promise<Bundle[]>;
+  getBundles(ownerId?: number): Promise<Bundle[]>;
   getBundle(id: number): Promise<Bundle | undefined>;
   createBundle(bundle: InsertBundle): Promise<Bundle>;
   updateBundle(id: number, data: Partial<InsertBundle>): Promise<Bundle>;
@@ -60,7 +60,7 @@ export interface IStorage {
   deletePriceEstimates(judgmentId: number, scenarios: string[]): Promise<void>;
   
   // Bonds
-  getBonds(ownerId: number): Promise<Bond[]>;
+  getBonds(ownerId?: number): Promise<Bond[]>;
   getBond(id: number): Promise<Bond | undefined>;
   createBond(bond: InsertBond): Promise<Bond>;
   updateBond(id: number, data: Partial<InsertBond>): Promise<Bond>;
@@ -96,7 +96,11 @@ export class DatabaseStorage implements IStorage {
   }
 
   // Judgments
-  async getJudgments(ownerId: number): Promise<Judgment[]> {
+  async getJudgments(ownerId?: number): Promise<Judgment[]> {
+    if (ownerId === undefined) {
+      // Admin: return all judgments
+      return await db.select().from(judgments).orderBy(desc(judgments.createdAt));
+    }
     return await db.select().from(judgments).where(eq(judgments.ownerId, ownerId)).orderBy(desc(judgments.createdAt));
   }
 
@@ -120,7 +124,11 @@ export class DatabaseStorage implements IStorage {
   }
 
   // Bundles
-  async getBundles(ownerId: number): Promise<Bundle[]> {
+  async getBundles(ownerId?: number): Promise<Bundle[]> {
+    if (ownerId === undefined) {
+      // Admin: return all bundles
+      return await db.select().from(bundles).orderBy(desc(bundles.createdAt));
+    }
     return await db.select().from(bundles).where(eq(bundles.ownerId, ownerId)).orderBy(desc(bundles.createdAt));
   }
 
@@ -187,7 +195,11 @@ export class DatabaseStorage implements IStorage {
   }
 
   // Bonds
-  async getBonds(ownerId: number): Promise<Bond[]> {
+  async getBonds(ownerId?: number): Promise<Bond[]> {
+    if (ownerId === undefined) {
+      // Admin: return all bonds
+      return await db.select().from(bonds).orderBy(desc(bonds.createdAt));
+    }
     return await db.select().from(bonds).where(eq(bonds.ownerId, ownerId)).orderBy(desc(bonds.createdAt));
   }
 
