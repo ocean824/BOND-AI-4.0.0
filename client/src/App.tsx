@@ -12,6 +12,7 @@ import LoginPage from "@/pages/login";
 import RegisterPage from "@/pages/register";
 import JudgmentsPage from "@/pages/judgments";
 import BundlesPage from "@/pages/bundles";
+import BondsPage from "@/pages/bonds";
 import InvestorDashboardPage from "@/pages/investor-dashboard";
 import NotFound from "@/pages/not-found";
 
@@ -59,6 +60,7 @@ function Router() {
         <Route path="/" component={HomePage} />
         <Route path="/judgments" component={JudgmentsPage} />
         <Route path="/bundles" component={BundlesPage} />
+        <Route path="/bonds" component={BondsPage} />
         <Route path="/investor" component={InvestorDashboardPage} />
         <Route component={NotFound} />
       </Switch>
