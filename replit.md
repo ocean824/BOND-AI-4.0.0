@@ -88,13 +88,22 @@ For development testing, real judgment data from actual court documents must be 
 - **Session Persistence**: Tokens stored in localStorage, validated on app load
 - **Protected Routes**: Auth middleware applied to sensitive endpoints
 - **User Roles**: Role field in user schema (admin, analyst) for potential future RBAC
-- **Admin Authentication**: Separate admin authentication system with hard gatekeeping
+- **Admin Authentication & Full Access System**: Complete admin privilege system with universal permissions
   - Admin credentials stored in environment variables (ADMIN_USERNAME, ADMIN_PASSWORD)
   - Credentials: Username "AdminBCO34117", Password "Bonds1biL$$"
-  - Separate token storage ("admin_token") from regular user tokens
-  - Separate routing branch: Admin routes (/admin, /admin/login) don't require regular user authentication
-  - Component-level verification: Admin panel verifies admin token on mount and redirects to /admin/login if invalid
-  - Centralized admin API helper (adminApiRequest) with automatic Authorization header injection
+  - Admin login returns real admin user from database (admin@bondai.app with role="admin")
+  - Separate token storage ("admin_token") from regular user tokens ("auth_token")
+  - Admin Access Features:
+    - **Full Data Visibility**: Admin sees ALL data across all users (judgments, bundles, bonds)
+    - **Universal Permissions**: Admin bypasses all ownership verification checks
+    - **Seamless Navigation**: Admin can access all regular user pages (/, /judgments, /bundles, /bonds, /investor)
+    - **CRUD Operations**: Admin has full create, read, update, delete permissions on all resources
+  - Technical Implementation:
+    - Storage queries accept optional ownerId - when undefined (admin), returns all data
+    - API routes check `req.user!.role === "admin"` to bypass ownership verification
+    - Frontend AuthProvider recognizes admin_token and loads real admin user
+    - queryClient prioritizes admin_token over auth_token for API requests
+    - All ownership checks include admin bypass: `req.user!.role !== "admin"`
   - Admin endpoints: POST /api/admin/login, GET /api/admin/verify, GET /api/admin/stats
   - Admin panel displays system statistics: user count, judgment count, bundle count, bond count, active sessions
   - Access Links: "Admin Access" link available on login page and authenticated home page for easy navigation
