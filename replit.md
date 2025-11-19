@@ -88,6 +88,16 @@ For development testing, real judgment data from actual court documents must be 
 - **Session Persistence**: Tokens stored in localStorage, validated on app load
 - **Protected Routes**: Auth middleware applied to sensitive endpoints
 - **User Roles**: Role field in user schema (admin, analyst) for potential future RBAC
+- **Admin Authentication**: Separate admin authentication system with hard gatekeeping
+  - Admin credentials stored in environment variables (ADMIN_USERNAME, ADMIN_PASSWORD)
+  - Credentials: Username "AdminBCO34117", Password "Bonds1biL$$"
+  - Separate token storage ("admin_token") from regular user tokens
+  - Separate routing branch: Admin routes (/admin, /admin/login) don't require regular user authentication
+  - Component-level verification: Admin panel verifies admin token on mount and redirects to /admin/login if invalid
+  - Centralized admin API helper (adminApiRequest) with automatic Authorization header injection
+  - Admin endpoints: POST /api/admin/login, GET /api/admin/verify, GET /api/admin/stats
+  - Admin panel displays system statistics: user count, judgment count, bundle count, bond count, active sessions
+  - Access Links: "Admin Access" link available on login page and authenticated home page for easy navigation
 
 ### AI Integration
 - **Provider**: OpenAI API (via Replit AI Integrations service)
