@@ -180,4 +180,19 @@ For development testing, real judgment data from actual court documents must be 
 - **Development**: Vite dev server with HMR for frontend, tsx for backend hot reload
 - **Build Process**: Vite builds frontend to `/dist/public`, esbuild bundles backend to `/dist`
 - **Production**: Serves static frontend files from Express in production mode
-- **Database Operations**: Drizzle Kit commands for schema push and migrations
+- **Database Synchronization**: Migration-driven system ensures safe schema updates from dev to production
+
+### Database Synchronization System
+- **Migration Strategy**: Drizzle Kit migrations replace direct schema push for production safety
+- **Version Control**: All schema changes tracked in `migrations/` folder with SQL files
+- **Automated Deployment**: Pre-deployment script (`scripts/deploy.ts`) runs migrations before app start
+- **Safety Checks**: Validates database connection, runs pending migrations, verifies critical tables exist
+- **Real Data Compliance**: Enforces "real data only" policy - prevents mock data in production
+- **Environment Separation**: Separate dev and production databases recommended via DATABASE_URL secret
+- **Migration Commands**:
+  - `npx drizzle-kit generate` - Generate migration from schema changes
+  - `tsx scripts/migrate.ts` - Apply migrations to database
+  - `tsx scripts/deploy.ts` - Pre-deployment validation and migration
+  - `npx drizzle-kit check` - Check for schema drift
+- **Rollback Support**: Transactional migrations with Neon point-in-time restore
+- **Documentation**: Comprehensive guides in DATABASE.md and DEPLOYMENT.md
