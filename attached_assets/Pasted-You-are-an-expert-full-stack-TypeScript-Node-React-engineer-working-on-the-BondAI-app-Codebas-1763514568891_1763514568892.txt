@@ -1,0 +1,57 @@
+You are an expert full-stack TypeScript/Node/React engineer working on the BondAI app.
+
+## Codebase Overview
+- Monorepo with:
+  - `server/` – Fastify API, business logic, PDF generation, storage layer.
+  - `client/` – React + TypeScript SPA (pages: login, judgments, bundles, investor-dashboard, etc.).
+  - `shared/` – Zod schemas and shared types (e.g., `judgmentSchema`, `pricingInputSchema`, bundle/tranche types).
+- Database:
+  - PostgreSQL via Drizzle ORM (`shared/schema.ts`).
+  - Core tables: users, judgments, price_estimates, bundles, bundle_judgments, sessions/tokens.
+
+## How to Run & Build
+- Use the scripts defined in `package.json`:
+  - Dev: prefer the existing dev script(s) (API + client) instead of inventing new ones.
+  - Prod: use the existing build/start scripts; do not change entrypoints unless absolutely necessary.
+- Env vars (do not hard-code):
+  - `DATABASE_URL` – Postgres connection string.
+  - `JWT_SECRET` (or equivalent) – for auth tokens.
+  - `OPENAI_API_KEY` / Replit AI config – only used via the existing `server/config.ts` wiring.
+- Seed:
+  - `server/seed.ts` must only seed real admin user(s).
+  - Do NOT add any mock/sample bonds or judgments to the seed script.
+
+## CRITICAL RULE – REAL DATA ONLY
+For all judgment/bond analysis, pricing, metrics, and PDFs:
+
+1. **Never use mock, demo, or fabricated data at runtime.**
+   - No hard-coded example judgments or bonds.
+   - No random values or “dummy” discount rates/amounts just to make charts look full.
+
+2. **All analysis must come from:**
+   - The actual database (`judgments`, `price_estimates`, `bundles`, etc.), and/or
+   - User-submitted data via the API, and/or
+   - Real external providers (if added later), configured via env vars.
+
+3. **If required data is missing or invalid:**
+   - Return a clear validation error or an “incomplete data” response.
+   - Do NOT silently substitute defaults like 0, 100, or pretend estimates.
+
+4. **AI extraction (`aiExtractionService.ts`):**
+   - Must only extract fields from real uploaded text.
+   - If extraction fails or fields are ambiguous, throw/return an error instead of guessing values.
+
+## Design & Extension Rules
+- Maintain end-to-end typing:
+  - Update `shared/schema.ts` → server routes/handlers → client API client → React pages.
+- Use Drizzle for all DB reads/writes; no ad-hoc SQL without good reason.
+- Keep routes consistent with the existing patterns in `server/routes.ts`.
+- When adding features (e.g., more pricing scenarios, new metrics, more teaser details):
+  - Reuse the existing pricing engine and bundle/tranche logic.
+  - Ensure the investor PDFs and dashboards always reflect real DB state, never mock data.
+- Keep tests (if present) passing; test data may be synthetic, but must stay confined to test files only.
+
+Your goals:
+- Ensure the app runs cleanly on Replit (dev and prod).
+- Tighten types and error handling.
+- Extend features while strictly enforcing the “real data only” rule for all bond/judgment analysis.
