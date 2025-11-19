@@ -72,6 +72,41 @@ export const bundleJudgments = pgTable("bundle_judgments", {
   addedAt: timestamp("added_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
+export const bonds = pgTable("bonds", {
+  id: serial("id").primaryKey(),
+  ownerId: integer("owner_id").notNull().references(() => users.id),
+  name: varchar("name", { length: 255 }).notNull(),
+  cusip: varchar("cusip", { length: 20 }),
+  isin: varchar("isin", { length: 20 }),
+  ticker: varchar("ticker", { length: 20 }),
+  faceValue: decimal("face_value", { precision: 18, scale: 2 }).notNull(),
+  currency: varchar("currency", { length: 3 }).notNull().default("USD"),
+  couponRate: decimal("coupon_rate", { precision: 6, scale: 3 }),
+  couponType: varchar("coupon_type", { length: 50 }).default("fixed"),
+  maturityDate: timestamp("maturity_date", { withTimezone: true }),
+  issueDate: timestamp("issue_date", { withTimezone: true }),
+  jurisdiction: varchar("jurisdiction", { length: 255 }),
+  governingLaw: varchar("governing_law", { length: 255 }),
+  status: varchar("status", { length: 50 }).notNull().default("draft"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const bondDocuments = pgTable("bond_documents", {
+  id: serial("id").primaryKey(),
+  bondId: integer("bond_id").notNull().references(() => bonds.id, { onDelete: "cascade" }),
+  ownerId: integer("owner_id").notNull().references(() => users.id),
+  filename: varchar("filename", { length: 500 }).notNull(),
+  mimeType: varchar("mime_type", { length: 255 }).notNull(),
+  sizeBytes: integer("size_bytes").notNull(),
+  storagePath: varchar("storage_path", { length: 1000 }).notNull(),
+  kind: varchar("kind", { length: 20 }).notNull().default("supporting"),
+  description: text("description"),
+  aiSummary: text("ai_summary"),
+  tags: jsonb("tags"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
 export const chatSessions = pgTable("chat_sessions", {
   id: serial("id").primaryKey(),
   userId: integer("user_id").notNull().references(() => users.id),
@@ -92,6 +127,7 @@ export const chatMessages = pgTable("chat_messages", {
 export const usersRelations = relations(users, ({ many }) => ({
   judgments: many(judgments),
   bundles: many(bundles),
+  bonds: many(bonds),
   chatSessions: many(chatSessions),
 }));
 
@@ -153,6 +189,25 @@ export const chatMessagesRelations = relations(chatMessages, ({ one }) => ({
   }),
 }));
 
+export const bondsRelations = relations(bonds, ({ one, many }) => ({
+  owner: one(users, {
+    fields: [bonds.ownerId],
+    references: [users.id],
+  }),
+  documents: many(bondDocuments),
+}));
+
+export const bondDocumentsRelations = relations(bondDocuments, ({ one }) => ({
+  bond: one(bonds, {
+    fields: [bondDocuments.bondId],
+    references: [bonds.id],
+  }),
+  owner: one(users, {
+    fields: [bondDocuments.ownerId],
+    references: [users.id],
+  }),
+}));
+
 // Insert schemas and types
 export const insertUserSchema = createInsertSchema(users).omit({
   id: true,
@@ -193,6 +248,24 @@ export const insertChatSessionSchema = createInsertSchema(chatSessions).omit({
 });
 
 export const insertChatMessageSchema = createInsertSchema(chatMessages).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertBondSchema = createInsertSchema(bonds, {
+  name: z.string().min(1, "Bond name is required"),
+  faceValue: z
+    .string()
+    .or(z.number())
+    .transform((v) => (typeof v === "string" ? Number(v) : v))
+    .refine((v) => !Number.isNaN(v), "Face value must be a number"),
+}).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertBondDocumentSchema = createInsertSchema(bondDocuments).omit({
   id: true,
   createdAt: true,
 });
@@ -251,6 +324,12 @@ export type InsertChatSession = z.infer<typeof insertChatSessionSchema>;
 
 export type ChatMessage = typeof chatMessages.$inferSelect;
 export type InsertChatMessage = z.infer<typeof insertChatMessageSchema>;
+
+export type Bond = typeof bonds.$inferSelect;
+export type InsertBond = z.infer<typeof insertBondSchema>;
+
+export type BondDocument = typeof bondDocuments.$inferSelect;
+export type InsertBondDocument = z.infer<typeof insertBondDocumentSchema>;
 
 // Additional types for API responses
 export type PricingScenario = {

@@ -1,0 +1,622 @@
+// client/src/pages/bonds.tsx
+import { useEffect, useState } from "react";
+import { useAuth } from "@/lib/auth";
+import { useToast } from "@/components/ui/use-toast";
+import {
+  Card,
+  CardHeader,
+  CardTitle,
+  CardDescription,
+  CardContent,
+} from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { Badge } from "@/components/ui/badge";
+import { cn } from "@/lib/utils";
+
+type Bond = {
+  id: number;
+  name: string;
+  cusip: string | null;
+  isin: string | null;
+  ticker: string | null;
+  faceValue: string | null;
+  currency: string | null;
+  couponRate: string | null;
+  couponType: string | null;
+  maturityDate: string | null;
+  issueDate: string | null;
+  jurisdiction: string | null;
+  governingLaw: string | null;
+  status: string | null;
+};
+
+type BondDocument = {
+  id: number;
+  bondId: number;
+  filename: string;
+  mimeType: string;
+  sizeBytes: number;
+  kind: "template" | "supporting";
+  description: string | null;
+  aiSummary: string | null;
+  tags: string[] | null;
+  createdAt: string;
+};
+
+export default function BondsPage() {
+  const { token } = useAuth();
+  const { toast } = useToast();
+
+  const [bonds, setBonds] = useState<Bond[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [selectedBond, setSelectedBond] = useState<Bond | null>(null);
+  const [docs, setDocs] = useState<BondDocument[]>([]);
+  const [creating, setCreating] = useState(false);
+  const [draft, setDraft] = useState<string>("");
+  const [draftLoading, setDraftLoading] = useState(false);
+  const [draftInstructions, setDraftInstructions] = useState("");
+
+  const [form, setForm] = useState({
+    name: "",
+    cusip: "",
+    isin: "",
+    ticker: "",
+    faceValue: "",
+    currency: "USD",
+    couponRate: "",
+    couponType: "fixed",
+    maturityDate: "",
+    issueDate: "",
+    jurisdiction: "",
+    governingLaw: "",
+  });
+
+  function authHeaders(): HeadersInit {
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  }
+
+  async function loadBonds() {
+    setLoading(true);
+    try {
+      const res = await fetch("/api/bonds", {
+        headers: {
+          "Content-Type": "application/json",
+          ...authHeaders(),
+        },
+      });
+      if (!res.ok) {
+        throw new Error("Failed to load bonds");
+      }
+      const data = (await res.json()) as Bond[];
+      setBonds(data);
+    } catch (error: any) {
+      console.error(error);
+      toast({
+        title: "Error loading bonds",
+        description: error.message ?? "Unexpected error",
+        variant: "destructive",
+      });
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function loadDocuments(bondId: number) {
+    try {
+      const res = await fetch(`/api/bonds/${bondId}`, {
+        headers: {
+          "Content-Type": "application/json",
+          ...authHeaders(),
+        },
+      });
+      if (!res.ok) {
+        throw new Error("Failed to load bond details");
+      }
+      const data = (await res.json()) as { bond: Bond; documents: BondDocument[] };
+      setSelectedBond(data.bond);
+      setDocs(data.documents);
+    } catch (error: any) {
+      console.error(error);
+      toast({
+        title: "Error loading bond",
+        description: error.message ?? "Unexpected error",
+        variant: "destructive",
+      });
+    }
+  }
+
+  useEffect(() => {
+    if (token) {
+      void loadBonds();
+    }
+  }, [token]);
+
+  function handleFormChange<K extends keyof typeof form>(key: K, value: string) {
+    setForm((prev) => ({ ...prev, [key]: value }));
+  }
+
+  async function handleCreateBond(e: React.FormEvent) {
+    e.preventDefault();
+    setCreating(true);
+    try {
+      const res = await fetch("/api/bonds", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...authHeaders(),
+        },
+        body: JSON.stringify({
+          ...form,
+          faceValue: form.faceValue ? Number(form.faceValue) : null,
+          couponRate: form.couponRate ? Number(form.couponRate) : null,
+        }),
+      });
+      if (!res.ok) {
+        throw new Error("Failed to create bond");
+      }
+      const created = (await res.json()) as Bond;
+      setBonds((prev) => [created, ...prev]);
+      setForm({
+        name: "",
+        cusip: "",
+        isin: "",
+        ticker: "",
+        faceValue: "",
+        currency: "USD",
+        couponRate: "",
+        couponType: "fixed",
+        maturityDate: "",
+        issueDate: "",
+        jurisdiction: "",
+        governingLaw: "",
+      });
+      toast({
+        title: "Bond created",
+        description: "Your bond instrument was created successfully.",
+      });
+    } catch (error: any) {
+      console.error(error);
+      toast({
+        title: "Error creating bond",
+        description: error.message ?? "Unexpected error",
+        variant: "destructive",
+      });
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  async function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>, kind: "template" | "supporting") {
+    if (!selectedBond) return;
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const formData = new FormData();
+    formData.append("file", file);
+    formData.append("kind", kind);
+
+    try {
+      const res = await fetch(`/api/bonds/${selectedBond.id}/documents`, {
+        method: "POST",
+        headers: {
+          ...authHeaders(),
+        },
+        body: formData,
+      });
+      if (!res.ok) {
+        throw new Error("Failed to upload document");
+      }
+      const created = (await res.json()) as BondDocument;
+      setDocs((prev) => [created, ...prev]);
+      toast({
+        title: "Document uploaded",
+        description: "The document was attached to this bond.",
+      });
+    } catch (error: any) {
+      console.error(error);
+      toast({
+        title: "Error uploading document",
+        description: error.message ?? "Unexpected error",
+        variant: "destructive",
+      });
+    } finally {
+      // reset file input
+      e.target.value = "";
+    }
+  }
+
+  async function handleGenerateDraft() {
+    if (!selectedBond) return;
+    setDraftLoading(true);
+    try {
+      const res = await fetch(`/api/bonds/${selectedBond.id}/ai-draft`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...authHeaders(),
+        },
+        body: JSON.stringify({
+          purpose: draftInstructions || undefined,
+          style: "term_sheet",
+        }),
+      });
+      if (!res.ok) {
+        throw new Error("Failed to generate draft");
+      }
+      const data = (await res.json()) as { draft: string };
+      setDraft(data.draft);
+    } catch (error: any) {
+      console.error(error);
+      toast({
+        title: "Error generating draft",
+        description: error.message ?? "Unexpected error",
+        variant: "destructive",
+      });
+    } finally {
+      setDraftLoading(false);
+    }
+  }
+
+  async function handleEditDraft() {
+    if (!selectedBond || !draft.trim()) return;
+    setDraftLoading(true);
+    try {
+      const res = await fetch(`/api/bonds/${selectedBond.id}/ai-edit`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...authHeaders(),
+        },
+        body: JSON.stringify({
+          existingDraft: draft,
+          instructions: draftInstructions || "Improve clarity and structure.",
+        }),
+      });
+      if (!res.ok) {
+        throw new Error("Failed to edit draft");
+      }
+      const data = (await res.json()) as { draft: string };
+      setDraft(data.draft);
+    } catch (error: any) {
+      console.error(error);
+      toast({
+        title: "Error editing draft",
+        description: error.message ?? "Unexpected error",
+        variant: "destructive",
+      });
+    } finally {
+      setDraftLoading(false);
+    }
+  }
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-2xl font-bold tracking-tight">Bonds</h1>
+        <p className="text-muted-foreground">
+          Create and manage real bond instruments, attach documents, and generate AI-assisted drafts.
+        </p>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)] gap-6">
+        <Card>
+          <CardHeader>
+            <CardTitle>New Bond</CardTitle>
+            <CardDescription>
+              Enter real-world information only. Do not use placeholders or mock data.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <form className="space-y-4" onSubmit={handleCreateBond}>
+              <div className="space-y-2">
+                <Label htmlFor="bond-name">Bond name</Label>
+                <Input
+                  id="bond-name"
+                  required
+                  value={form.name}
+                  onChange={(e) => handleFormChange("name", e.target.value)}
+                  placeholder="Example: 2029 Senior Secured Notes"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="cusip">CUSIP</Label>
+                  <Input
+                    id="cusip"
+                    value={form.cusip}
+                    onChange={(e) => handleFormChange("cusip", e.target.value)}
+                    placeholder="e.g. 123456AB9"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="isin">ISIN</Label>
+                  <Input
+                    id="isin"
+                    value={form.isin}
+                    onChange={(e) => handleFormChange("isin", e.target.value)}
+                    placeholder="e.g. US123456AB90"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="ticker">Ticker (optional)</Label>
+                  <Input
+                    id="ticker"
+                    value={form.ticker}
+                    onChange={(e) => handleFormChange("ticker", e.target.value)}
+                    placeholder="e.g. XYZ"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="currency">Currency</Label>
+                  <Input
+                    id="currency"
+                    value={form.currency}
+                    onChange={(e) => handleFormChange("currency", e.target.value)}
+                    placeholder="USD"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-3 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="faceValue">Face value</Label>
+                  <Input
+                    id="faceValue"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={form.faceValue}
+                    onChange={(e) => handleFormChange("faceValue", e.target.value)}
+                    placeholder="1000000"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="couponRate">Coupon (%)</Label>
+                  <Input
+                    id="couponRate"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={form.couponRate}
+                    onChange={(e) => handleFormChange("couponRate", e.target.value)}
+                    placeholder="7.50"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="couponType">Coupon type</Label>
+                  <Input
+                    id="couponType"
+                    value={form.couponType}
+                    onChange={(e) => handleFormChange("couponType", e.target.value)}
+                    placeholder="fixed / floating"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="issueDate">Issue date</Label>
+                  <Input
+                    id="issueDate"
+                    type="date"
+                    value={form.issueDate}
+                    onChange={(e) => handleFormChange("issueDate", e.target.value)}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="maturityDate">Maturity date</Label>
+                  <Input
+                    id="maturityDate"
+                    type="date"
+                    value={form.maturityDate}
+                    onChange={(e) => handleFormChange("maturityDate", e.target.value)}
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="jurisdiction">Jurisdiction</Label>
+                  <Input
+                    id="jurisdiction"
+                    value={form.jurisdiction}
+                    onChange={(e) => handleFormChange("jurisdiction", e.target.value)}
+                    placeholder="e.g. State of New York, USA"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="governingLaw">Governing law</Label>
+                  <Input
+                    id="governingLaw"
+                    value={form.governingLaw}
+                    onChange={(e) => handleFormChange("governingLaw", e.target.value)}
+                    placeholder="e.g. New York law"
+                  />
+                </div>
+              </div>
+
+              <Button type="submit" className="mt-4" disabled={creating}>
+                {creating ? "Creating…" : "Create Bond"}
+              </Button>
+            </form>
+          </CardContent>
+        </Card>
+
+        <Card className="min-h-[420px]">
+          <CardHeader>
+            <CardTitle>Your Bonds</CardTitle>
+            <CardDescription>Select a bond to view documents and AI tools.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {loading ? (
+              <p className="text-sm text-muted-foreground">Loading bonds…</p>
+            ) : bonds.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                No bonds yet. Create your first bond using the form on the left.
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {bonds.map((bond) => (
+                  <button
+                    key={bond.id}
+                    type="button"
+                    onClick={() => void loadDocuments(bond.id)}
+                    className={cn(
+                      "w-full text-left px-3 py-2 rounded-md border text-sm hover:bg-accent",
+                      selectedBond?.id === bond.id && "border-primary bg-accent"
+                    )}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <div>
+                        <p className="font-medium">{bond.name}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {bond.cusip || bond.isin || "No CUSIP/ISIN set"}
+                        </p>
+                      </div>
+                      {bond.status && <Badge variant="outline">{bond.status}</Badge>}
+                    </div>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Face value:{" "}
+                      {bond.faceValue
+                        ? `$${Number(bond.faceValue).toLocaleString()}`
+                        : "—"}
+                      {" · "}
+                      Coupon:{" "}
+                      {bond.couponRate
+                        ? `${Number(bond.couponRate).toFixed(2)}%`
+                        : "—"}
+                    </p>
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {selectedBond && (
+              <div className="space-y-4 border-t pt-4 mt-2">
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <h3 className="text-sm font-semibold">{selectedBond.name}</h3>
+                    <p className="text-xs text-muted-foreground">
+                      {selectedBond.cusip || selectedBond.isin || "No CUSIP/ISIN set"}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-xs font-medium">Attach documents</p>
+                    <div className="flex items-center gap-2">
+                      <Label
+                        htmlFor="upload-template"
+                        className="cursor-pointer text-xs underline"
+                      >
+                        Upload template
+                      </Label>
+                      <input
+                        id="upload-template"
+                        type="file"
+                        className="hidden"
+                        onChange={(e) => void handleFileUpload(e, "template")}
+                      />
+                      <Label
+                        htmlFor="upload-supporting"
+                        className="cursor-pointer text-xs underline"
+                      >
+                        Upload supporting
+                      </Label>
+                      <input
+                        id="upload-supporting"
+                        type="file"
+                        className="hidden"
+                        onChange={(e) => void handleFileUpload(e, "supporting")}
+                      />
+                    </div>
+                  </div>
+
+                  {docs.length === 0 ? (
+                    <p className="text-xs text-muted-foreground">
+                      No documents attached yet.
+                    </p>
+                  ) : (
+                    <div className="space-y-2">
+                      {docs.map((doc) => (
+                        <div
+                          key={doc.id}
+                          className="border rounded-md px-3 py-2 flex flex-col gap-1"
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <div>
+                              <p className="text-xs font-medium">{doc.filename}</p>
+                              <p className="text-[10px] text-muted-foreground">
+                                {doc.kind === "template" ? "Template" : "Supporting"} ·{" "}
+                                {(doc.sizeBytes / 1024).toFixed(1)} KB
+                              </p>
+                            </div>
+                          </div>
+                          {doc.aiSummary && (
+                            <p className="text-[11px] text-muted-foreground line-clamp-3">
+                              {doc.aiSummary}
+                            </p>
+                          )}
+                          {doc.tags && doc.tags.length > 0 && (
+                            <div className="flex flex-wrap gap-1 mt-1">
+                              {doc.tags.map((tag) => (
+                                <Badge key={tag} variant="outline" className="text-[10px]">
+                                  {tag}
+                                </Badge>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <div className="space-y-2 border-t pt-3">
+                  <Label htmlFor="draftInstructions" className="text-xs">
+                    Draft instructions / focus
+                  </Label>
+                  <Textarea
+                    id="draftInstructions"
+                    rows={3}
+                    value={draftInstructions}
+                    onChange={(e) => setDraftInstructions(e.target.value)}
+                    placeholder="Example: Term sheet style summary compliant with U.S. law; emphasize coupon, maturity, and security. This is for counsel to review, not final."
+                  />
+                  <div className="flex items-center gap-2">
+                    <Button size="sm" onClick={handleGenerateDraft} disabled={draftLoading}>
+                      {draftLoading ? "Working…" : "Generate draft"}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={handleEditDraft}
+                      disabled={draftLoading || !draft.trim()}
+                    >
+                      Refine draft
+                    </Button>
+                  </div>
+                  <Textarea
+                    className="mt-2 font-mono text-xs"
+                    rows={12}
+                    value={draft}
+                    onChange={(e) => setDraft(e.target.value)}
+                    placeholder="AI-generated draft will appear here. Always have qualified counsel review before use."
+                  />
+                </div>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+    </div>
+  );
+}

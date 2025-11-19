@@ -15,6 +15,12 @@ import {
   priceEstimates,
   type PriceEstimate,
   type InsertPriceEstimate,
+  bonds,
+  type Bond,
+  type InsertBond,
+  bondDocuments,
+  type BondDocument,
+  type InsertBondDocument,
   chatSessions,
   type ChatSession,
   type InsertChatSession,
@@ -52,6 +58,18 @@ export interface IStorage {
   getPriceEstimates(judgmentId: number): Promise<PriceEstimate[]>;
   createPriceEstimate(estimate: InsertPriceEstimate): Promise<PriceEstimate>;
   deletePriceEstimates(judgmentId: number, scenarios: string[]): Promise<void>;
+  
+  // Bonds
+  getBonds(ownerId: number): Promise<Bond[]>;
+  getBond(id: number): Promise<Bond | undefined>;
+  createBond(bond: InsertBond): Promise<Bond>;
+  updateBond(id: number, data: Partial<InsertBond>): Promise<Bond>;
+  
+  // Bond documents
+  createBondDocument(doc: InsertBondDocument): Promise<BondDocument>;
+  getBondDocuments(bondId: number, ownerId: number): Promise<BondDocument[]>;
+  searchBondDocuments(ownerId: number, query: string): Promise<BondDocument[]>;
+  updateBondDocumentAI(id: number, summary: string, tags: string[]): Promise<BondDocument>;
   
   // Chat
   getChatSession(id: number): Promise<ChatSession | undefined>;
@@ -166,6 +184,67 @@ export class DatabaseStorage implements IStorage {
 
   async deletePriceEstimates(judgmentId: number, scenarios: string[]): Promise<void> {
     await db.delete(priceEstimates).where(eq(priceEstimates.judgmentId, judgmentId));
+  }
+
+  // Bonds
+  async getBonds(ownerId: number): Promise<Bond[]> {
+    return await db.select().from(bonds).where(eq(bonds.ownerId, ownerId)).orderBy(desc(bonds.createdAt));
+  }
+
+  async getBond(id: number): Promise<Bond | undefined> {
+    const [bond] = await db.select().from(bonds).where(eq(bonds.id, id));
+    return bond || undefined;
+  }
+
+  async createBond(bond: InsertBond): Promise<Bond> {
+    const [created] = await db.insert(bonds).values(bond).returning();
+    return created;
+  }
+
+  async updateBond(id: number, data: Partial<InsertBond>): Promise<Bond> {
+    const [updated] = await db
+      .update(bonds)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(bonds.id, id))
+      .returning();
+    return updated;
+  }
+
+  // Bond documents
+  async createBondDocument(doc: InsertBondDocument): Promise<BondDocument> {
+    const [created] = await db.insert(bondDocuments).values(doc).returning();
+    return created;
+  }
+
+  async getBondDocuments(bondId: number, ownerId: number): Promise<BondDocument[]> {
+    return await db
+      .select()
+      .from(bondDocuments)
+      .where(
+        and(
+          eq(bondDocuments.bondId, bondId),
+          eq(bondDocuments.ownerId, ownerId)
+        )
+      )
+      .orderBy(desc(bondDocuments.createdAt));
+  }
+
+  async searchBondDocuments(ownerId: number, query: string): Promise<BondDocument[]> {
+    // Simple search: filter by owner, could add full-text search later
+    return await db
+      .select()
+      .from(bondDocuments)
+      .where(eq(bondDocuments.ownerId, ownerId))
+      .orderBy(desc(bondDocuments.createdAt));
+  }
+
+  async updateBondDocumentAI(id: number, summary: string, tags: string[]): Promise<BondDocument> {
+    const [updated] = await db
+      .update(bondDocuments)
+      .set({ aiSummary: summary, tags: tags as any })
+      .where(eq(bondDocuments.id, id))
+      .returning();
+    return updated;
   }
 
   // Chat
