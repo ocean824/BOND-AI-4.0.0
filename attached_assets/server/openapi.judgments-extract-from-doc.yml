@@ -1,0 +1,91 @@
+openapi: 3.0.3
+info:
+  title: BondAI API – Judgment Doc Upload Snippet
+  version: "1.0.0"
+
+paths:
+  /api/judgments/extract-from-doc:
+    post:
+      summary: Extract judgment data from an uploaded PDF or Word document
+      description: >
+        Accepts a real judgment document (PDF or Word) and uses the AI extractor to pull
+        debtor name, case number, judgment amount, and related notes into a structured payload.
+        Only the text inside the uploaded document is used; no mock or fabricated values are added.
+      tags:
+        - Judgments
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - file
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: >
+                    Judgment PDF or Word (.docx) file. The server will reject unsupported types.
+      responses:
+        "200":
+          description: Extracted judgment fields
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExtractedJudgmentFromDocResponse"
+        "400":
+          description: Bad request (missing file or unsupported type)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "422":
+          description: Unable to read text from document
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+components:
+  schemas:
+    ExtractedJudgmentFromDocResponse:
+      type: object
+      description: >
+        Minimal judgment fields extracted from a real document, used to auto-fill
+        the Upload Judgment form. All values come from the uploaded file.
+      properties:
+        debtorName:
+          type: string
+          description: Debtor name extracted from the document (if available).
+        caseNumber:
+          type: string
+          nullable: true
+          description: Case number extracted from the document (if available).
+        judgmentAmount:
+          type: number
+          format: double
+          description: Judgment amount extracted from the document (if available).
+        notes:
+          type: string
+          nullable: true
+          description: >
+            Optional textual notes derived from the document (e.g., court, jurisdiction,
+            judgment date), for human convenience only.
+      required:
+        - debtorName
+        - judgmentAmount
