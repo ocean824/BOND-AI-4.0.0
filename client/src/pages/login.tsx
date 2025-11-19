@@ -86,11 +86,6 @@ export default function LoginPage() {
                   data-testid="input-password"
                 />
               </div>
-              <div className="text-sm text-muted-foreground bg-muted p-3 rounded-md">
-                <p className="font-medium mb-1">Demo Credentials:</p>
-                <p>Email: admin@bondai.app</p>
-                <p>Password: admin123</p>
-              </div>
             </CardContent>
             <CardFooter className="flex flex-col gap-3">
               <Button

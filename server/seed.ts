@@ -77,9 +77,6 @@ async function seed() {
   */
 
   console.log("\n🎉 Seeding complete!");
-  console.log("\n📧 Login credentials:");
-  console.log("   Email: admin@bondai.app");
-  console.log("   Password: admin123");
   console.log("\n⚠️  IMPORTANT: This application uses REAL judgment data only.");
   console.log("   Upload PDF court documents or manually enter verified information.");
   console.log("   No mock/placeholder data is permitted.");
