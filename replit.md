@@ -30,7 +30,7 @@ Preferred communication style: Simple, everyday language.
 ### Database Architecture
 - **ORM**: Drizzle ORM.
 - **Database**: PostgreSQL (Neon serverless driver).
-- **Schema Design**: Includes users (role-based), judgments, bundles (with tranche assignments), price estimates, bonds (with financial instrument details), bond documents (with AI summarization/tagging), chat sessions, and recovery scores.
+- **Schema Design**: Includes users (role-based), judgments, bundles (with tranche assignments), price estimates, bonds (with financial instrument details), bond documents (with AI summarization/tagging), chat sessions, recovery scores, trending topics (with AI summaries).
 - **Migrations**: SQL-based via Drizzle Kit.
 - **Seeding**: Admin user account only.
 
@@ -74,17 +74,34 @@ Preferred communication style: Simple, everyday language.
 - **Security**: Ownership verification.
 - **Implementation**: PDFKit library.
 
+### Trending Topics System
+- **Python FastAPI Microservice**: Separate FastAPI service for fetching and summarizing bond market news.
+- **Functionality**: Fetch trending topics from external sources, AI-powered summarization with GPT-4.1-mini, risk level and sentiment analysis.
+- **Database Tables**: `trending_topics` stores news articles/topics with metadata, `trending_summaries` stores AI-generated summaries with bullet points, risk levels, and sentiment.
+- **API Endpoints**: 
+  - `GET /api/trending` - Fetch trending topics with summaries (authenticated users)
+  - `POST /api/admin/trending/refresh` - Refresh trending data via FastAPI (admin only)
+- **Integration**: Node.js Express backend communicates with Python FastAPI service via HTTP.
+- **Configuration**: Optional feature activated via `FASTAPI_BASE_URL` and `FASTAPI_INTERNAL_TOKEN` environment variables.
+- **Security**: Internal token authentication between services, admin-only refresh endpoint.
+
 ## External Dependencies
 
 ### Third-Party Services
 - **Neon Database**: PostgreSQL serverless database.
-- **OpenAI (via Replit AI Integrations)**: GPT-5 access.
+- **OpenAI (via Replit AI Integrations)**: GPT-5 access for judgment extraction and bond drafting, GPT-4.1-mini for trending topic summarization.
 - **Replit Platform**: Development and deployment environment.
+- **FastAPI Python Service** (optional): Internal microservice for trending topics aggregation and AI summarization.
 
 ### Key NPM Packages
 - **Frontend**: `@tanstack/react-query`, `wouter`, `@radix-ui/*`, `tailwindcss`, `zod`, `lucide-react`, `react-hook-form`, `@hookform/resolvers`.
 - **Backend**: `drizzle-orm`, `@neondatabase/serverless`, `bcryptjs`, `jsonwebtoken`, `express`, `zod`, `pdfkit`.
 - **Development**: `vite`, `tsx`, `esbuild`, `drizzle-kit`.
+
+### Key Python Packages (FastAPI Service)
+- **Framework**: `fastapi`, `uvicorn[standard]`
+- **AI Integration**: `openai` (for GPT-4.1-mini summarization)
+- **Data Validation**: `pydantic`
 
 ### Environment Variables
 - `DATABASE_URL`: PostgreSQL connection string.
@@ -92,3 +109,6 @@ Preferred communication style: Simple, everyday language.
 - `AI_INTEGRATIONS_OPENAI_API_KEY`: OpenAI API key.
 - `SESSION_SECRET` or `JWT_SECRET`: Secret for JWT signing.
 - `NODE_ENV`: Environment indicator.
+- `FASTAPI_BASE_URL` (optional): Base URL for Python FastAPI trending service.
+- `FASTAPI_INTERNAL_TOKEN` (optional): Authentication token for internal service communication.
+- `OPENAI_API_KEY` (for Python service): OpenAI API key for trending topic summarization.
