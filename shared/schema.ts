@@ -123,6 +123,32 @@ export const chatMessages = pgTable("chat_messages", {
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
+// Trending topics & summaries
+export const trendingTopics = pgTable("trending_topics", {
+  id: serial("id").primaryKey(),
+  source: varchar("source", { length: 100 }).notNull().default("news"),
+  externalId: text("external_id"),
+  title: text("title").notNull(),
+  url: text("url"),
+  category: varchar("category", { length: 100 }),
+  score: decimal("score", { precision: 6, scale: 3 }).default("0"),
+  publishedAt: timestamp("published_at", { withTimezone: true }),
+  fetchedAt: timestamp("fetched_at", { withTimezone: true }).defaultNow().notNull(),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().default({}),
+});
+
+export const trendingSummaries = pgTable("trending_summaries", {
+  id: serial("id").primaryKey(),
+  topicId: integer("topic_id").notNull().references(() => trendingTopics.id, { onDelete: "cascade" }),
+  summary: text("summary").notNull(),
+  bulletPoints: jsonb("bullet_points").$type<string[]>().default([]),
+  riskLevel: varchar("risk_level", { length: 50 }),
+  sentiment: varchar("sentiment", { length: 50 }),
+  relevanceScore: decimal("relevance_score", { precision: 6, scale: 3 }).default("0"),
+  model: varchar("model", { length: 100 }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
 // Relations
 export const usersRelations = relations(users, ({ many }) => ({
   judgments: many(judgments),
@@ -208,6 +234,17 @@ export const bondDocumentsRelations = relations(bondDocuments, ({ one }) => ({
   }),
 }));
 
+export const trendingTopicsRelations = relations(trendingTopics, ({ many }) => ({
+  summaries: many(trendingSummaries),
+}));
+
+export const trendingSummariesRelations = relations(trendingSummaries, ({ one }) => ({
+  topic: one(trendingTopics, {
+    fields: [trendingSummaries.topicId],
+    references: [trendingTopics.id],
+  }),
+}));
+
 // Insert schemas and types
 export const insertUserSchema = createInsertSchema(users).omit({
   id: true,
@@ -266,6 +303,16 @@ export const insertBondSchema = createInsertSchema(bonds, {
 });
 
 export const insertBondDocumentSchema = createInsertSchema(bondDocuments).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertTrendingTopicSchema = createInsertSchema(trendingTopics).omit({
+  id: true,
+  fetchedAt: true,
+});
+
+export const insertTrendingSummarySchema = createInsertSchema(trendingSummaries).omit({
   id: true,
   createdAt: true,
 });
@@ -330,6 +377,12 @@ export type InsertBond = z.infer<typeof insertBondSchema>;
 
 export type BondDocument = typeof bondDocuments.$inferSelect;
 export type InsertBondDocument = z.infer<typeof insertBondDocumentSchema>;
+
+export type TrendingTopic = typeof trendingTopics.$inferSelect;
+export type InsertTrendingTopic = z.infer<typeof insertTrendingTopicSchema>;
+
+export type TrendingSummary = typeof trendingSummaries.$inferSelect;
+export type InsertTrendingSummary = z.infer<typeof insertTrendingSummarySchema>;
 
 // Additional types for API responses
 export type PricingScenario = {
