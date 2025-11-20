@@ -19,6 +19,11 @@ export function validateConfig() {
     console.warn("   Set AI_INTEGRATIONS_OPENAI_BASE_URL and AI_INTEGRATIONS_OPENAI_API_KEY to enable AI features.");
   }
 
+  // Optional: FastAPI trending service
+  if (!process.env.FASTAPI_BASE_URL) {
+    console.warn("⚠️  Warning: FASTAPI_BASE_URL not set. Trending refresh via FastAPI will be disabled.");
+  }
+  
   if (errors.length > 0) {
     console.error("\n🚨 Configuration validation failed:\n");
     errors.forEach(error => console.error(`  ${error}`));
@@ -36,5 +41,10 @@ export const config = {
     baseUrl: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
     apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
     enabled: !!(process.env.AI_INTEGRATIONS_OPENAI_BASE_URL && process.env.AI_INTEGRATIONS_OPENAI_API_KEY),
+  },
+  fastapi: {
+    baseUrl: process.env.FASTAPI_BASE_URL,
+    internalToken: process.env.FASTAPI_INTERNAL_TOKEN,
+    enabled: !!process.env.FASTAPI_BASE_URL,
   },
 };
