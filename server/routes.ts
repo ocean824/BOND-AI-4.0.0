@@ -7,6 +7,7 @@ import { buildMultiScenarioPricing } from "./services/pricingService";
 import { generateInvestorTeaserPDF } from "./services/pdfGenerationService";
 import { generateBondDraft } from "./services/bondAiService";
 import { summarizeBondDocumentFromFile } from "./services/bondDocumentAiService";
+import { getTrendingTopics, refreshTrendingTopics } from "./services/trendingService";
 import bcrypt from "bcryptjs";
 import { z } from "zod";
 import { sql } from "drizzle-orm";
@@ -732,6 +733,41 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Generate teaser PDF error:", error);
       res.status(500).json({ error: "Failed to generate teaser PDF" });
+    }
+  });
+
+  // ===== TRENDING TOPICS ROUTES =====
+  app.get("/api/trending", authMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const limit = req.query.limit ? parseInt(String(req.query.limit), 10) : 20;
+      const category = (req.query.category as string) || undefined;
+
+      const topics = await getTrendingTopics({ limit, category });
+      res.json(topics);
+    } catch (error) {
+      console.error("Get trending topics error:", error);
+      res.status(500).json({ error: "Failed to load trending topics" });
+    }
+  });
+
+  app.post("/api/admin/trending/refresh", authMiddleware, async (req: AuthRequest, res) => {
+    try {
+      if (req.user?.role !== "admin") {
+        return res.status(403).json({ error: "Forbidden" });
+      }
+
+      const { category, limit } = req.body ?? {};
+      const topics = await refreshTrendingTopics({
+        category: category || "bonds",
+        limit: limit ? Number(limit) : 20,
+      });
+
+      res.json({ success: true, topics });
+    } catch (error: any) {
+      console.error("Refresh trending topics error:", error);
+      res.status(500).json({
+        error: error?.message || "Failed to refresh trending topics",
+      });
     }
   });
 
