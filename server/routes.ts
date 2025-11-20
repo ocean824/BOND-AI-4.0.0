@@ -750,16 +750,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  const refreshTrendingSchema = z.object({
+    category: z.string().max(100).optional(),
+    limit: z.number().int().min(1).max(50).optional(),
+  });
+
   app.post("/api/admin/trending/refresh", authMiddleware, async (req: AuthRequest, res) => {
     try {
       if (req.user?.role !== "admin") {
         return res.status(403).json({ error: "Forbidden" });
       }
 
-      const { category, limit } = req.body ?? {};
+      const validation = refreshTrendingSchema.safeParse(req.body);
+      if (!validation.success) {
+        return res.status(400).json({ 
+          error: "Invalid request", 
+          details: validation.error.errors 
+        });
+      }
+
+      const { category, limit } = validation.data;
       const topics = await refreshTrendingTopics({
         category: category || "bonds",
-        limit: limit ? Number(limit) : 20,
+        limit: limit || 20,
       });
 
       res.json({ success: true, topics });

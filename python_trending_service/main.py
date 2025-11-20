@@ -8,6 +8,13 @@ from openai import OpenAI
 INTERNAL_TOKEN = os.getenv("FASTAPI_INTERNAL_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
+# Validate required configuration
+if not INTERNAL_TOKEN:
+    raise RuntimeError("FASTAPI_INTERNAL_TOKEN environment variable must be set for security")
+
+if not OPENAI_API_KEY:
+    raise RuntimeError("OPENAI_API_KEY environment variable must be set")
+
 app = FastAPI(title="BondAI Trending Service")
 
 # ---------- Models ----------
@@ -58,8 +65,8 @@ class SummarizeResponse(BaseModel):
 # ---------- Auth dependency ----------
 
 def require_internal_token(x_internal_token: Optional[str] = Header(default=None)):
-    if INTERNAL_TOKEN and x_internal_token != INTERNAL_TOKEN:
-        raise HTTPException(status_code=401, detail="Invalid internal token")
+    if not x_internal_token or x_internal_token != INTERNAL_TOKEN:
+        raise HTTPException(status_code=401, detail="Invalid or missing internal token")
 
 # ---------- OpenAI client ----------
 
@@ -113,35 +120,53 @@ async def summarize(req: SummarizeRequest):
     summaries: List[Summary] = []
 
     for topic in req.topics:
-        prompt = f"""You are a fixed-income and bond-market analyst.
+        prompt = f"""You are a fixed-income and bond-market analyst. Analyze this news article and respond in JSON format:
 
 Article title: {topic.title}
 URL: {topic.url or "N/A"}
 
-1. Write a concise 3–4 sentence summary focused on bond-market impact.
-2. List 3–5 bullet-point takeaways.
-3. Provide a risk level (low/medium/high).
-4. Provide sentiment (bullish/bearish/neutral) for bond investors.
-"""
+Provide a JSON response with this exact structure:
+{{
+  "summary": "3-4 sentence summary focused on bond-market impact",
+  "bullet_points": ["takeaway 1", "takeaway 2", "takeaway 3"],
+  "risk_level": "low|medium|high",
+  "sentiment": "bullish|bearish|neutral"
+}}"""
 
-        completion = client.responses.create(
-            model=req.model,
-            input=prompt,
-            max_output_tokens=512,
-        )
-
-        # Adjust this to match the actual Response object structure
-        text = completion.output[0].content[0].text  # type: ignore
-
-        summaries.append(
-            Summary(
-                summary=text,
-                bullet_points=[],
-                risk_level=None,
-                sentiment=None,
-                relevance_score=0.9,
+        try:
+            completion = client.responses.create(
                 model=req.model,
+                input=prompt,
+                max_output_tokens=512,
+                response_format={"type": "json_object"}
             )
-        )
+
+            # Parse AI response
+            import json
+            text = completion.output[0].content[0].text  # type: ignore
+            parsed = json.loads(text)
+
+            summaries.append(
+                Summary(
+                    summary=parsed.get("summary", "No summary available"),
+                    bullet_points=parsed.get("bullet_points", []),
+                    risk_level=parsed.get("risk_level"),
+                    sentiment=parsed.get("sentiment"),
+                    relevance_score=0.9,
+                    model=req.model,
+                )
+            )
+        except Exception as e:
+            # Fallback if parsing fails
+            summaries.append(
+                Summary(
+                    summary=f"Error generating summary: {str(e)}",
+                    bullet_points=[],
+                    risk_level="medium",
+                    sentiment="neutral",
+                    relevance_score=0.5,
+                    model=req.model,
+                )
+            )
 
     return SummarizeResponse(summaries=summaries)
