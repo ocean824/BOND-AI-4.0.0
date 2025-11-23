@@ -87,6 +87,10 @@ export const bonds = pgTable("bonds", {
   issueDate: timestamp("issue_date", { withTimezone: true }),
   jurisdiction: varchar("jurisdiction", { length: 255 }),
   governingLaw: varchar("governing_law", { length: 255 }),
+  
+  bondScore: integer("bond_score"),
+  riskTier: varchar("risk_tier", { length: 20 }),
+  
   status: varchar("status", { length: 50 }).notNull().default("draft"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
@@ -296,6 +300,17 @@ export const insertBondSchema = createInsertSchema(bonds, {
     .or(z.number())
     .transform((v) => (typeof v === "string" ? Number(v) : v))
     .refine((v) => !Number.isNaN(v), "Face value must be a number"),
+  bondScore: z
+    .number()
+    .int()
+    .min(0)
+    .max(100)
+    .optional()
+    .nullable(),
+  riskTier: z
+    .enum(["low", "moderate", "high"])
+    .optional()
+    .nullable(),
 }).omit({
   id: true,
   createdAt: true,
