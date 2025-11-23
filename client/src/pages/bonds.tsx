@@ -31,6 +31,8 @@ type Bond = {
   jurisdiction: string | null;
   governingLaw: string | null;
   status: string | null;
+  bondScore: number | null;
+  riskTier: "low" | "moderate" | "high" | null;
 };
 
 type BondDocument = {
@@ -249,6 +251,8 @@ export default function BondsPage() {
           ...form,
           faceValue: form.faceValue ? Number(form.faceValue) : null,
           couponRate: form.couponRate ? Number(form.couponRate) : null,
+          bondScore: bondScorePreview,
+          riskTier: bondRiskTierPreview,
         }),
       });
       if (!res.ok) {
