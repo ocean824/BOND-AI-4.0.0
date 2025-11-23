@@ -1,0 +1,1932 @@
+Create a folder (e.g. UnderwritingFeaturePack/),
+
+Create the subfolders/files exactly as shown,
+
+Zip that folder on your machine,
+
+Upload it into your Replit workspace and merge it into your BondAI repo.
+
+1. Feature Pack File Tree
+
+Create this structure:
+
+UnderwritingFeaturePack/
+  README_UNDERWRITING.md
+  server/
+    services/
+      underwritingService.ts
+      routes.underwriting-snippet.ts
+    openapi.underwriting.yml
+  client/
+    src/
+      pages/
+        underwriting.tsx
+  docs/
+    UNDERWRITING_PATCH_NOTES.md
+
+
+Then zip UnderwritingFeaturePack/ into UnderwritingFeaturePack.zip.
+
+2. README_UNDERWRITING.md
+# Underwriting Feature Pack
+
+This pack adds a new **"Underwriting"** feature to your BondAI app.
+
+It is based on your underwriting checklist (parties, businesses, credit/banking, addresses,
+licenses, tax brackets, real estate, liens, filings, and multi-party collection math) and is
+designed for a Node/Express + React + Drizzle stack running on Replit.
+
+Core capabilities:
+
+- Capture all underwriting fields you outlined:
+  - Parties and businesses, addresses, credit/banking, licenses/associations, tax brackets,
+    real estate, appraisals, highest and best use, loans/liens, county filings, Secretary
+    of State, final notice to perfect bond, second filing, risk management insurance, etc.
+- Compute numeric metrics using your rules:
+  - 50% of attached assets
+  - 50% of vassalees' annual revenue
+  - 50% of risk management insurance
+  - Multi-party collection math (total claims across parties and average collection %)
+- AI-enhanced narrative:
+  - Uses OpenAI (ChatGPT) to explain the metrics in plain English, *without inventing
+    new numbers*.
+- React UI page `/underwriting`:
+  - Full underwriting form
+  - Dynamic parties list
+  - Real-time metrics preview
+  - Saved cases list + AI narrative
+
+To integrate, follow `docs/UNDERWRITING_PATCH_NOTES.md`.
+
+3. Backend Service – server/services/underwritingService.ts
+// server/services/underwritingService.ts
+import OpenAI from "openai";
+import { config } from "../config";
+
+/**
+ * Party-level underwriting input.
+ */
+export interface UnderwritingPartyInput {
+  name: string;
+  role: "debtor" | "guarantor" | "vassalee" | "other";
+  type?: "individual" | "business" | "bank" | "other";
+  taxBracketPct?: number | null;
+  annualRevenue?: number | null;
+  attachedAssetValue?: number | null;
+  riskManagementCoverage?: number | null;
+  expectedCollectionPct?: number | null; // 0–100
+  notes?: string | null;
+}
+
+/**
+ * Case-level underwriting input.
+ * This encodes all the items from your checklist (1–20).
+ */
+export interface UnderwritingCaseInput {
+  title: string;
+  primaryDebtorName: string;
+
+  // Core economics
+  claimAmount: number;
+  baseBondAmount?: number | null;
+  attachedAssetsValue?: number | null;       // 17) assets attached
+  vassaleesAnnualRevenue?: number | null;    // 18) annual revenue of vassalees
+  riskManagementCoverage?: number | null;    // 19) risk management insurance
+
+  // Dates / filings
+  finalNoticeToPerfectBondDate?: string | null;
+  secondFilingDate?: string | null;
+
+  // Qualitative underwriting notes (from your list)
+  creditBankingSummary?: string | null;              // 3)
+  addressesSummary?: string | null;                  // 4)
+  licensesAndAssociationsSummary?: string | null;    // 5)
+  realEstateSummary?: string | null;                 // 7)
+  appraisalSummary?: string | null;                  // 8)
+  highestBestUseSummary?: string | null;             // 9)
+  loansAndLiensSummary?: string | null;              // 10)
+  countyFilingsSummary?: string | null;              // 13)
+  secretaryOfStateSummary?: string | null;           // 14)
+  riskManagementNotes?: string | null;               // 19 extra detail
+
+  canPlaceRealEstateLien?: boolean | null;           // 11)
+  canPlaceBusinessLien?: boolean | null;             // 12)
+
+  notes?: string | null;                             // general notes
+}
+
+/**
+ * Computed metrics based on your 50% rules and multi-party math.
+ */
+export interface UnderwritingMetrics {
+  claimAmount: number;
+  baseBondAmount: number | null;
+
+  attachedAssetsValue: number;
+  assetRecoveryPct: number;
+  estimatedAssetRecovery: number;
+
+  vassaleesAnnualRevenue: number;
+  revenueRecoveryPct: number;
+  estimatedRevenueRecovery: number;
+
+  riskManagementCoverage: number;
+  insuranceRecoveryPct: number;
+  estimatedInsuranceRecovery: number;
+
+  estimatedTotalRecovery: number;
+
+  partiesCount: number;
+  averagePartyCollectionPct: number | null;
+  totalMultiPartyClaims: number;
+  estimatedCollectionFromParties: number;
+  collectionAsPctOfClaim: number | null;
+  isCollectionGreaterThanClaim: boolean | null;
+}
+
+/**
+ * Canonical object that you can store/return.
+ */
+export interface UnderwritingCaseWithMetrics {
+  caseInput: UnderwritingCaseInput;
+  parties: UnderwritingPartyInput[];
+  metrics: UnderwritingMetrics;
+  narrative?: string | null;
+}
+
+const openai = config.openai.enabled
+  ? new OpenAI({
+      baseURL: config.openai.baseUrl,
+      apiKey: config.openai.apiKey,
+    })
+  : null;
+
+/**
+ * Pure calculation logic – no AI, no randomness.
+ * Implements:
+ *  - 50% of attached assets
+ *  - 50% of vassalees' annual revenue
+ *  - 50% of risk management coverage
+ *  - Multi-party collection math based on average collection %.
+ */
+export function computeUnderwritingMetrics(
+  caseInput: UnderwritingCaseInput,
+  parties: UnderwritingPartyInput[],
+): UnderwritingMetrics {
+  const claimAmount = safeNumber(caseInput.claimAmount);
+  const baseBondAmount =
+    caseInput.baseBondAmount != null ? safeNumber(caseInput.baseBondAmount) : null;
+
+  const attachedAssetsValue = safeNumber(caseInput.attachedAssetsValue);
+  const vassaleesAnnualRevenue = safeNumber(caseInput.vassaleesAnnualRevenue);
+  const riskManagementCoverage = safeNumber(caseInput.riskManagementCoverage);
+
+  // Your rules 17, 18, 19: 50% each
+  const assetRecoveryPct = 0.5;
+  const revenueRecoveryPct = 0.5;
+  const insuranceRecoveryPct = 0.5;
+
+  const estimatedAssetRecovery = attachedAssetsValue * assetRecoveryPct;
+  const estimatedRevenueRecovery = vassaleesAnnualRevenue * revenueRecoveryPct;
+  const estimatedInsuranceRecovery = riskManagementCoverage * insuranceRecoveryPct;
+
+  const estimatedTotalRecovery =
+    estimatedAssetRecovery + estimatedRevenueRecovery + estimatedInsuranceRecovery;
+
+  // Rule 20: multi-party collection math
+  const partiesCount = parties.length;
+
+  const collectionPcts: number[] = parties
+    .map((p) =>
+      p.expectedCollectionPct != null ? safePercent(p.expectedCollectionPct) : null,
+    )
+    .filter((v): v is number => v !== null);
+
+  let averagePartyCollectionPct: number | null = null;
+  if (collectionPcts.length > 0) {
+    const sum = collectionPcts.reduce((acc, v) => acc + v, 0);
+    averagePartyCollectionPct = sum / collectionPcts.length;
+  } else {
+    // Default if user does not provide per-party %:
+    averagePartyCollectionPct = 50;
+  }
+
+  const totalMultiPartyClaims = claimAmount * partiesCount;
+
+  let estimatedCollectionFromParties = 0;
+  let collectionAsPctOfClaim: number | null = null;
+  let isCollectionGreaterThanClaim: boolean | null = null;
+
+  if (averagePartyCollectionPct != null) {
+    estimatedCollectionFromParties =
+      totalMultiPartyClaims * (averagePartyCollectionPct / 100);
+
+    if (claimAmount > 0) {
+      collectionAsPctOfClaim = estimatedCollectionFromParties / claimAmount;
+      isCollectionGreaterThanClaim = collectionAsPctOfClaim >= 1;
+    }
+  }
+
+  return {
+    claimAmount,
+    baseBondAmount,
+    attachedAssetsValue,
+    assetRecoveryPct,
+    estimatedAssetRecovery,
+    vassaleesAnnualRevenue,
+    revenueRecoveryPct,
+    estimatedRevenueRecovery,
+    riskManagementCoverage,
+    insuranceRecoveryPct,
+    estimatedInsuranceRecovery,
+    estimatedTotalRecovery,
+    partiesCount,
+    averagePartyCollectionPct,
+    totalMultiPartyClaims,
+    estimatedCollectionFromParties,
+    collectionAsPctOfClaim,
+    isCollectionGreaterThanClaim,
+  };
+}
+
+/**
+ * AI narrative – explains the metrics in plain English.
+ * IMPORTANT: uses ONLY provided numbers, never fabricates.
+ */
+export async function generateUnderwritingNarrative(
+  caseInput: UnderwritingCaseInput,
+  parties: UnderwritingPartyInput[],
+  metrics: UnderwritingMetrics,
+): Promise<string | null> {
+  if (!openai) return null;
+
+  const SYSTEM_PROMPT = `
+You are an assistant summarizing an underwriting analysis for a bond or judgment-based claim.
+
+Rules:
+- Use ONLY the numeric and textual data provided by the user.
+- Do NOT invent any new amounts, percentages, parties, or assets.
+- Explain how the 50% rules for assets, vassalees' revenue, and risk management coverage
+  were applied.
+- Explain the multi-party collection math: total claims across parties and estimated
+  collection, compared to the original claim amount.
+- Refer to qualitative notes (addresses, licenses, real estate, filings) only as they appear.
+- Do NOT give investment advice. This is informational and educational only.
+- Keep the output to 3–6 short paragraphs or bullet-point sections.
+- Never reveal chain-of-thought; output only conclusions and explanations.
+  `.trim();
+
+  const payload = { caseInput, parties, metrics };
+
+  const completion = await openai.chat.completions.create({
+    model: "gpt-5",
+    messages: [
+      { role: "system", content: SYSTEM_PROMPT },
+      {
+        role: "user",
+        content:
+          "Summarize the underwriting case and metrics below. All numbers are real and already computed.\n\n" +
+          JSON.stringify(payload, null, 2),
+      },
+    ],
+    max_completion_tokens: 1000,
+  });
+
+  const content = completion.choices[0]?.message?.content;
+  return content ?? null;
+}
+
+function safeNumber(value: unknown): number {
+  if (value == null) return 0;
+  const n = typeof value === "string" ? Number(value) : (value as number);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function safePercent(value: unknown): number {
+  const n = safeNumber(value);
+  if (n < 0) return 0;
+  if (n > 100) return 100;
+  return n;
+}
+
+4. Backend Routes – server/services/routes.underwriting-snippet.ts
+
+This is meant to be merged into your existing server/routes.ts.
+
+// server/services/routes.underwriting-snippet.ts
+import { z } from "zod";
+import type { AuthRequest } from "../authMiddleware";
+import { authMiddleware } from "../authMiddleware";
+import { storage } from "../storage";
+import {
+  computeUnderwritingMetrics,
+  generateUnderwritingNarrative,
+  type UnderwritingCaseInput,
+  type UnderwritingPartyInput,
+} from "./underwritingService";
+
+const underwritingPartySchema = z.object({
+  name: z.string().min(1),
+  role: z.enum(["debtor", "guarantor", "vassalee", "other"]),
+  type: z.enum(["individual", "business", "bank", "other"]).optional(),
+  taxBracketPct: z.number().min(0).max(100).nullable().optional(),
+  annualRevenue: z.number().min(0).nullable().optional(),
+  attachedAssetValue: z.number().min(0).nullable().optional(),
+  riskManagementCoverage: z.number().min(0).nullable().optional(),
+  expectedCollectionPct: z.number().min(0).max(100).nullable().optional(),
+  notes: z.string().nullable().optional(),
+});
+
+const underwritingCaseSchema = z.object({
+  title: z.string().min(1),
+  primaryDebtorName: z.string().min(1),
+  claimAmount: z.number().min(0),
+  baseBondAmount: z.number().min(0).nullable().optional(),
+  attachedAssetsValue: z.number().min(0).nullable().optional(),
+  vassaleesAnnualRevenue: z.number().min(0).nullable().optional(),
+  riskManagementCoverage: z.number().min(0).nullable().optional(),
+  finalNoticeToPerfectBondDate: z.string().nullable().optional(),
+  secondFilingDate: z.string().nullable().optional(),
+  creditBankingSummary: z.string().nullable().optional(),
+  addressesSummary: z.string().nullable().optional(),
+  licensesAndAssociationsSummary: z.string().nullable().optional(),
+  realEstateSummary: z.string().nullable().optional(),
+  appraisalSummary: z.string().nullable().optional(),
+  highestBestUseSummary: z.string().nullable().optional(),
+  loansAndLiensSummary: z.string().nullable().optional(),
+  countyFilingsSummary: z.string().nullable().optional(),
+  secretaryOfStateSummary: z.string().nullable().optional(),
+  riskManagementNotes: z.string().nullable().optional(),
+  canPlaceRealEstateLien: z.boolean().nullable().optional(),
+  canPlaceBusinessLien: z.boolean().nullable().optional(),
+  notes: z.string().nullable().optional(),
+});
+
+const underwritingCreateSchema = z.object({
+  caseInput: underwritingCaseSchema,
+  parties: z.array(underwritingPartySchema).default([]),
+});
+
+/**
+ * Register underwriting routes inside your main registerRoutes(app) function:
+ *   registerUnderwritingRoutes(app);
+ */
+export function registerUnderwritingRoutes(app: any) {
+  /**
+   * GET /api/underwriting/cases
+   */
+  app.get(
+    "/api/underwriting/cases",
+    authMiddleware,
+    async (req: AuthRequest, res: any) => {
+      try {
+        const userId = req.user!.id;
+        const rows = await storage.getUnderwritingCases(userId);
+        res.json(rows);
+      } catch (error) {
+        console.error("List underwriting cases error:", error);
+        res.status(500).json({ error: "Failed to list underwriting cases" });
+      }
+    },
+  );
+
+  /**
+   * POST /api/underwriting/cases
+   *  - Validates the payload
+   *  - Computes metrics
+   *  - Calls OpenAI for narrative (if enabled)
+   *  - Persists via storage
+   */
+  app.post(
+    "/api/underwriting/cases",
+    authMiddleware,
+    async (req: AuthRequest, res: any) => {
+      try {
+        const parsed = underwritingCreateSchema.parse(req.body);
+        const caseInput: UnderwritingCaseInput = parsed.caseInput;
+        const parties: UnderwritingPartyInput[] = parsed.parties;
+
+        const metrics = computeUnderwritingMetrics(caseInput, parties);
+        const narrative = await generateUnderwritingNarrative(
+          caseInput,
+          parties,
+          metrics,
+        );
+
+        const saved = await storage.createUnderwritingCaseWithPartiesAndMetrics(
+          req.user!.id,
+          caseInput,
+          parties,
+          metrics,
+          narrative ?? undefined,
+        );
+
+        res.status(201).json(saved);
+      } catch (error: any) {
+        console.error("Create underwriting case error:", error);
+        if (error.name === "ZodError") {
+          return res.status(400).json({
+            error: "Validation failed",
+            details: error.errors,
+          });
+        }
+        res.status(500).json({ error: "Failed to create underwriting case" });
+      }
+    },
+  );
+}
+
+5. Frontend Page – client/src/pages/underwriting.tsx
+
+This is a full React page using your existing UI primitives (shadcn-like).
+
+// client/src/pages/underwriting.tsx
+import { useMemo, useState } from "react";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { Plus, Trash2 } from "lucide-react";
+
+import { useToast } from "@/hooks/use-toast";
+import { cn } from "@/lib/utils";
+import {
+  Card,
+  CardHeader,
+  CardTitle,
+  CardDescription,
+  CardContent,
+} from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { Badge } from "@/components/ui/badge";
+
+type UnderwritingPartyInput = {
+  name: string;
+  role: "debtor" | "guarantor" | "vassalee" | "other";
+  type: "individual" | "business" | "bank" | "other";
+  taxBracketPct?: number | null;
+  annualRevenue?: number | null;
+  attachedAssetValue?: number | null;
+  riskManagementCoverage?: number | null;
+  expectedCollectionPct?: number | null;
+  notes?: string | null;
+};
+
+type UnderwritingCaseInput = {
+  title: string;
+  primaryDebtorName: string;
+  claimAmount: number;
+  baseBondAmount?: number | null;
+  attachedAssetsValue?: number | null;
+  vassaleesAnnualRevenue?: number | null;
+  riskManagementCoverage?: number | null;
+  finalNoticeToPerfectBondDate?: string | null;
+  secondFilingDate?: string | null;
+  creditBankingSummary?: string | null;
+  addressesSummary?: string | null;
+  licensesAndAssociationsSummary?: string | null;
+  realEstateSummary?: string | null;
+  appraisalSummary?: string | null;
+  highestBestUseSummary?: string | null;
+  loansAndLiensSummary?: string | null;
+  countyFilingsSummary?: string | null;
+  secretaryOfStateSummary?: string | null;
+  riskManagementNotes?: string | null;
+  canPlaceRealEstateLien?: boolean | null;
+  canPlaceBusinessLien?: boolean | null;
+  notes?: string | null;
+};
+
+type UnderwritingMetrics = {
+  claimAmount: number;
+  baseBondAmount: number | null;
+  attachedAssetsValue: number;
+  assetRecoveryPct: number;
+  estimatedAssetRecovery: number;
+  vassaleesAnnualRevenue: number;
+  revenueRecoveryPct: number;
+  estimatedRevenueRecovery: number;
+  riskManagementCoverage: number;
+  insuranceRecoveryPct: number;
+  estimatedInsuranceRecovery: number;
+  estimatedTotalRecovery: number;
+  partiesCount: number;
+  averagePartyCollectionPct: number | null;
+  totalMultiPartyClaims: number;
+  estimatedCollectionFromParties: number;
+  collectionAsPctOfClaim: number | null;
+  isCollectionGreaterThanClaim: boolean | null;
+};
+
+type UnderwritingCaseWithMetrics = {
+  id: number;
+  ownerId: number;
+  caseInput: UnderwritingCaseInput;
+  parties: UnderwritingPartyInput[];
+  metrics: UnderwritingMetrics;
+  narrative?: string | null;
+  createdAt: string;
+};
+
+function safeNumberStr(value: string): number {
+  if (!value) return 0;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function computeLocalMetrics(
+  caseInput: UnderwritingCaseInput,
+  parties: UnderwritingPartyInput[],
+): UnderwritingMetrics {
+  const claimAmount = caseInput.claimAmount || 0;
+  const baseBondAmount = caseInput.baseBondAmount ?? null;
+
+  const attachedAssetsValue = caseInput.attachedAssetsValue || 0;
+  const vassaleesAnnualRevenue = caseInput.vassaleesAnnualRevenue || 0;
+  const riskManagementCoverage = caseInput.riskManagementCoverage || 0;
+
+  const assetRecoveryPct = 0.5;
+  const revenueRecoveryPct = 0.5;
+  const insuranceRecoveryPct = 0.5;
+
+  const estimatedAssetRecovery = attachedAssetsValue * assetRecoveryPct;
+  const estimatedRevenueRecovery = vassaleesAnnualRevenue * revenueRecoveryPct;
+  const estimatedInsuranceRecovery = riskManagementCoverage * insuranceRecoveryPct;
+
+  const estimatedTotalRecovery =
+    estimatedAssetRecovery + estimatedRevenueRecovery + estimatedInsuranceRecovery;
+
+  const partiesCount = parties.length;
+  const collectionPcts: number[] = parties
+    .map((p) =>
+      p.expectedCollectionPct != null
+        ? Math.min(Math.max(p.expectedCollectionPct, 0), 100)
+        : null,
+    )
+    .filter((v): v is number => v !== null);
+
+  let averagePartyCollectionPct: number | null = null;
+  if (collectionPcts.length > 0) {
+    const sum = collectionPcts.reduce((acc, v) => acc + v, 0);
+    averagePartyCollectionPct = sum / collectionPcts.length;
+  } else {
+    averagePartyCollectionPct = 50;
+  }
+
+  const totalMultiPartyClaims = claimAmount * partiesCount;
+
+  let estimatedCollectionFromParties = 0;
+  let collectionAsPctOfClaim: number | null = null;
+  let isCollectionGreaterThanClaim: boolean | null = null;
+
+  if (averagePartyCollectionPct != null) {
+    estimatedCollectionFromParties =
+      totalMultiPartyClaims * (averagePartyCollectionPct / 100);
+    if (claimAmount > 0) {
+      collectionAsPctOfClaim = estimatedCollectionFromParties / claimAmount;
+      isCollectionGreaterThanClaim = collectionAsPctOfClaim >= 1;
+    }
+  }
+
+  return {
+    claimAmount,
+    baseBondAmount,
+    attachedAssetsValue,
+    assetRecoveryPct,
+    estimatedAssetRecovery,
+    vassaleesAnnualRevenue,
+    revenueRecoveryPct,
+    estimatedRevenueRecovery,
+    riskManagementCoverage,
+    insuranceRecoveryPct,
+    estimatedInsuranceRecovery,
+    estimatedTotalRecovery,
+    partiesCount,
+    averagePartyCollectionPct,
+    totalMultiPartyClaims,
+    estimatedCollectionFromParties,
+    collectionAsPctOfClaim,
+    isCollectionGreaterThanClaim,
+  };
+}
+
+export default function UnderwritingPage() {
+  const { toast } = useToast();
+
+  const [caseForm, setCaseForm] = useState({
+    title: "",
+    primaryDebtorName: "",
+    claimAmount: "",
+    baseBondAmount: "",
+    attachedAssetsValue: "",
+    vassaleesAnnualRevenue: "",
+    riskManagementCoverage: "",
+    finalNoticeToPerfectBondDate: "",
+    secondFilingDate: "",
+    creditBankingSummary: "",
+    addressesSummary: "",
+    licensesAndAssociationsSummary: "",
+    realEstateSummary: "",
+    appraisalSummary: "",
+    highestBestUseSummary: "",
+    loansAndLiensSummary: "",
+    countyFilingsSummary: "",
+    secretaryOfStateSummary: "",
+    riskManagementNotes: "",
+    canPlaceRealEstateLien: false,
+    canPlaceBusinessLien: false,
+    notes: "",
+  });
+
+  const [parties, setParties] = useState<UnderwritingPartyInput[]>([]);
+  const [selectedCase, setSelectedCase] = useState<UnderwritingCaseWithMetrics | null>(null);
+
+  const metrics = useMemo<UnderwritingMetrics>(() => {
+    const input: UnderwritingCaseInput = {
+      title: caseForm.title || "(draft)",
+      primaryDebtorName: caseForm.primaryDebtorName || "(draft)",
+      claimAmount: safeNumberStr(caseForm.claimAmount),
+      baseBondAmount: caseForm.baseBondAmount ? safeNumberStr(caseForm.baseBondAmount) : null,
+      attachedAssetsValue: safeNumberStr(caseForm.attachedAssetsValue),
+      vassaleesAnnualRevenue: safeNumberStr(caseForm.vassaleesAnnualRevenue),
+      riskManagementCoverage: safeNumberStr(caseForm.riskManagementCoverage),
+      finalNoticeToPerfectBondDate:
+        caseForm.finalNoticeToPerfectBondDate || undefined,
+      secondFilingDate: caseForm.secondFilingDate || undefined,
+      creditBankingSummary: caseForm.creditBankingSummary || undefined,
+      addressesSummary: caseForm.addressesSummary || undefined,
+      licensesAndAssociationsSummary:
+        caseForm.licensesAndAssociationsSummary || undefined,
+      realEstateSummary: caseForm.realEstateSummary || undefined,
+      appraisalSummary: caseForm.appraisalSummary || undefined,
+      highestBestUseSummary: caseForm.highestBestUseSummary || undefined,
+      loansAndLiensSummary: caseForm.loansAndLiensSummary || undefined,
+      countyFilingsSummary: caseForm.countyFilingsSummary || undefined,
+      secretaryOfStateSummary: caseForm.secretaryOfStateSummary || undefined,
+      riskManagementNotes: caseForm.riskManagementNotes || undefined,
+      canPlaceRealEstateLien: caseForm.canPlaceRealEstateLien,
+      canPlaceBusinessLien: caseForm.canPlaceBusinessLien,
+      notes: caseForm.notes || undefined,
+    };
+    return computeLocalMetrics(input, parties);
+  }, [caseForm, parties]);
+
+  const casesQuery = useQuery<UnderwritingCaseWithMetrics[]>({
+    queryKey: ["underwriting-cases"],
+    queryFn: async () => {
+      const res = await fetch("/api/underwriting/cases", {
+        credentials: "include",
+      });
+      if (!res.ok) {
+        throw new Error("Failed to load underwriting cases");
+      }
+      return (await res.json()) as UnderwritingCaseWithMetrics[];
+    },
+  });
+
+  const createCaseMutation = useMutation({
+    mutationFn: async () => {
+      const payload: { caseInput: UnderwritingCaseInput; parties: UnderwritingPartyInput[] } = {
+        caseInput: {
+          title: caseForm.title,
+          primaryDebtorName: caseForm.primaryDebtorName,
+          claimAmount: safeNumberStr(caseForm.claimAmount),
+          baseBondAmount: caseForm.baseBondAmount ? safeNumberStr(caseForm.baseBondAmount) : null,
+          attachedAssetsValue: safeNumberStr(caseForm.attachedAssetsValue),
+          vassaleesAnnualRevenue: safeNumberStr(caseForm.vassaleesAnnualRevenue),
+          riskManagementCoverage: safeNumberStr(caseForm.riskManagementCoverage),
+          finalNoticeToPerfectBondDate:
+            caseForm.finalNoticeToPerfectBondDate || undefined,
+          secondFilingDate: caseForm.secondFilingDate || undefined,
+          creditBankingSummary: caseForm.creditBankingSummary || undefined,
+          addressesSummary: caseForm.addressesSummary || undefined,
+          licensesAndAssociationsSummary:
+            caseForm.licensesAndAssociationsSummary || undefined,
+          realEstateSummary: caseForm.realEstateSummary || undefined,
+          appraisalSummary: caseForm.appraisalSummary || undefined,
+          highestBestUseSummary: caseForm.highestBestUseSummary || undefined,
+          loansAndLiensSummary: caseForm.loansAndLiensSummary || undefined,
+          countyFilingsSummary: caseForm.countyFilingsSummary || undefined,
+          secretaryOfStateSummary: caseForm.secretaryOfStateSummary || undefined,
+          riskManagementNotes: caseForm.riskManagementNotes || undefined,
+          canPlaceRealEstateLien: caseForm.canPlaceRealEstateLien,
+          canPlaceBusinessLien: caseForm.canPlaceBusinessLien,
+          notes: caseForm.notes || undefined,
+        },
+        parties,
+      };
+
+      const res = await fetch("/api/underwriting/cases", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify(payload),
+      });
+
+      if (!res.ok) {
+        const text = (await res.text()) || res.statusText;
+        throw new Error(text);
+      }
+
+      return (await res.json()) as UnderwritingCaseWithMetrics;
+    },
+    onSuccess: (created) => {
+      toast({
+        title: "Underwriting case saved",
+        description: "We computed and stored underwriting metrics and the AI narrative.",
+      });
+      setSelectedCase(created);
+      void casesQuery.refetch();
+    },
+    onError: (error: any) => {
+      console.error(error);
+      toast({
+        title: "Failed to save underwriting case",
+        description: error?.message ?? "Unexpected error",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const handleAddParty = () => {
+    setParties((prev) => [
+      ...prev,
+      {
+        name: "",
+        role: "debtor",
+        type: "individual",
+        taxBracketPct: null,
+        annualRevenue: null,
+        attachedAssetValue: null,
+        riskManagementCoverage: null,
+        expectedCollectionPct: 50,
+        notes: "",
+      },
+    ]);
+  };
+
+  const handleUpdateParty = (index: number, patch: Partial<UnderwritingPartyInput>) => {
+    setParties((prev) => prev.map((p, i) => (i === index ? { ...p, ...patch } : p)));
+  };
+
+  const handleRemoveParty = (index: number) => {
+    setParties((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    createCaseMutation.mutate();
+  };
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-2xl font-bold tracking-tight">Underwriting</h1>
+        <p className="text-muted-foreground">
+          Capture parties, businesses, addresses, assets, revenue, insurance, and filings.
+          Compute underwriting metrics and multi-party collection estimates from real data only.
+        </p>
+      </div>
+
+      <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,2.5fr)_minmax(0,2fr)] gap-6">
+        <Card>
+          <CardHeader>
+            <CardTitle>New Underwriting Case</CardTitle>
+            <CardDescription>
+              Enter claim details, qualitative underwriting info, and each party&apos;s data.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <form className="space-y-6" onSubmit={handleSubmit}>
+              {/* Basic case info */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="uw-title">Case title</Label>
+                  <Input
+                    id="uw-title"
+                    value={caseForm.title}
+                    onChange={(e) =>
+                      setCaseForm((f) => ({ ...f, title: e.target.value }))
+                    }
+                    placeholder="Example: Ernest Todd Proffit – Bond Underwriting"
+                    required
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="uw-primary-debtor">Primary debtor</Label>
+                  <Input
+                    id="uw-primary-debtor"
+                    value={caseForm.primaryDebtorName}
+                    onChange={(e) =>
+                      setCaseForm((f) => ({
+                        ...f,
+                        primaryDebtorName: e.target.value,
+                      }))
+                    }
+                    required
+                  />
+                </div>
+              </div>
+
+              {/* Amounts & dates */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="uw-claim">Claim amount</Label>
+                  <Input
+                    id="uw-claim"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={caseForm.claimAmount}
+                    onChange={(e) =>
+                      setCaseForm((f) => ({ ...f, claimAmount: e.target.value }))
+                    }
+                    placeholder="2000000"
+                    required
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="uw-bond">Base bond amount (optional)</Label>
+                  <Input
+                    id="uw-bond"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={caseForm.baseBondAmount}
+                    onChange={(e) =>
+                      setCaseForm((f) => ({ ...f, baseBondAmount: e.target.value }))
+                    }
+                    placeholder="2000000"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="uw-final-notice">Final notice to perfect bond</Label>
+                  <Input
+                    id="uw-final-notice"
+                    type="date"
+                    value={caseForm.finalNoticeToPerfectBondDate}
+                    onChange={(e) =>
+                      setCaseForm((f) => ({
+                        ...f,
+                        finalNoticeToPerfectBondDate: e.target.value,
+                      }))
+                    }
+                  />
+                </div>
+              </div>
+
+              {/* 17,18,19 */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="uw-assets">Attached assets value</Label>
+                  <Input
+                    id="uw-assets"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={caseForm.attachedAssetsValue}
+                    onChange={(e) =>
+                      setCaseForm((f) => ({ ...f, attachedAssetsValue: e.target.value }))
+                    }
+                    placeholder="e.g. 3000000"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="uw-revenue">Vassalees annual revenue</Label>
+                  <Input
+                    id="uw-revenue"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={caseForm.vassaleesAnnualRevenue}
+                    onChange={(e) =>
+                      setCaseForm((f) => ({
+                        ...f,
+                        vassaleesAnnualRevenue: e.target.value,
+                      }))
+                    }
+                    placeholder="e.g. 4500000"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="uw-insurance">Risk management / insurance</Label>
+                  <Input
+                    id="uw-insurance"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={caseForm.riskManagementCoverage}
+                    onChange={(e) =>
+                      setCaseForm((f) => ({
+                        ...f,
+                        riskManagementCoverage: e.target.value,
+                      }))
+                    }
+                    placeholder="e.g. 1000000"
+                  />
+                </div>
+              </div>
+
+              {/* Additional dates & notes */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="uw-second-filing">Second filing date (optional)</Label>
+                  <Input
+                    id="uw-second-filing"
+                    type="date"
+                    value={caseForm.secondFilingDate}
+                    onChange={(e) =>
+                      setCaseForm((f) => ({ ...f, secondFilingDate: e.target.value }))
+                    }
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="uw-notes">General notes</Label>
+                  <Textarea
+                    id="uw-notes"
+                    rows={3}
+                    value={caseForm.notes}
+                    onChange={(e) =>
+                      setCaseForm((f) => ({ ...f, notes: e.target.value }))
+                    }
+                    placeholder="Additional underwriting context."
+                  />
+                </div>
+              </div>
+
+              {/* Qualitative underwriting sections */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 border-t pt-4">
+                <div className="space-y-2">
+                  <Label>Credit / banking summary</Label>
+                  <Textarea
+                    rows={3}
+                    value={caseForm.creditBankingSummary}
+                    onChange={(e) =>
+                      setCaseForm((f) => ({ ...f, creditBankingSummary: e.target.value }))
+                    }
+                    placeholder="Key banking relationships, credit facilities, account info."
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Addresses summary</Label>
+                  <Textarea
+                    rows={3}
+                    value={caseForm.addressesSummary}
+                    onChange={(e) =>
+                      setCaseForm((f) => ({ ...f, addressesSummary: e.target.value }))
+                    }
+                    placeholder="Home, work, secondary properties for all parties."
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Licenses / skillsets / associations</Label>
+                  <Textarea
+                    rows={3}
+                    value={caseForm.licensesAndAssociationsSummary}
+                    onChange={(e) =>
+                      setCaseForm((f) => ({
+                        ...f,
+                        licensesAndAssociationsSummary: e.target.value,
+                      }))
+                    }
+                    placeholder="Professional licenses, certifications, clubs, associations."
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Real estate attached / appraisal / highest &amp; best use</Label>
+                  <Textarea
+                    rows={3}
+                    value={caseForm.realEstateSummary}
+                    onChange={(e) =>
+                      setCaseForm((f) => ({ ...f, realEstateSummary: e.target.value }))
+                    }
+                    placeholder="Real estate connected to the case."
+                  />
+                  <Textarea
+                    rows={2}
+                    className="mt-1"
+                    value={caseForm.appraisalSummary}
+                    onChange={(e) =>
+                      setCaseForm((f) => ({ ...f, appraisalSummary: e.target.value }))
+                    }
+                    placeholder="Appraisal notes."
+                  />
+                  <Textarea
+                    rows={2}
+                    className="mt-1"
+                    value={caseForm.highestBestUseSummary}
+                    onChange={(e) =>
+                      setCaseForm((f) => ({
+                        ...f,
+                        highestBestUseSummary: e.target.value,
+                      }))
+                    }
+                    placeholder="Highest and best use analysis."
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Loans / liens</Label>
+                  <Textarea
+                    rows={3}
+                    value={caseForm.loansAndLiensSummary}
+                    onChange={(e) =>
+                      setCaseForm((f) => ({ ...f, loansAndLiensSummary: e.target.value }))
+                    }
+                    placeholder="Existing loans, liens, encumbrances."
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Filings (county / Secretary of State)</Label>
+                  <Textarea
+                    rows={2}
+                    value={caseForm.countyFilingsSummary}
+                    onChange={(e) =>
+                      setCaseForm((f) => ({ ...f, countyFilingsSummary: e.target.value }))
+                    }
+                    placeholder="Recorded filings with the county."
+                  />
+                  <Textarea
+                    rows={2}
+                    className="mt-1"
+                    value={caseForm.secretaryOfStateSummary}
+                    onChange={(e) =>
+                      setCaseForm((f) => ({
+                        ...f,
+                        secretaryOfStateSummary: e.target.value,
+                      }))
+                    }
+                    placeholder="Secretary of State searches / filings."
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Risk management notes</Label>
+                  <Textarea
+                    rows={3}
+                    value={caseForm.riskManagementNotes}
+                    onChange={(e) =>
+                      setCaseForm((f) => ({
+                        ...f,
+                        riskManagementNotes: e.target.value,
+                      }))
+                    }
+                    placeholder="Insurance structures, risk mitigation instruments."
+                  />
+                  <div className="flex items-center gap-4 mt-2 text-xs">
+                    <label className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={caseForm.canPlaceRealEstateLien}
+                        onChange={(e) =>
+                          setCaseForm((f) => ({
+                            ...f,
+                            canPlaceRealEstateLien: e.target.checked,
+                          }))
+                        }
+                      />
+                      Real estate lien possible
+                    </label>
+                    <label className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={caseForm.canPlaceBusinessLien}
+                        onChange={(e) =>
+                          setCaseForm((f) => ({
+                            ...f,
+                            canPlaceBusinessLien: e.target.checked,
+                          }))
+                        }
+                      />
+                      Business lien possible
+                    </label>
+                  </div>
+                </div>
+              </div>
+
+              {/* Parties */}
+              <div className="space-y-3 border-t pt-4">
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <h2 className="text-sm font-semibold">Parties</h2>
+                    <p className="text-xs text-muted-foreground">
+                      Add all debtors, guarantors, vassalees, and related parties. Use real data only.
+                    </p>
+                  </div>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={handleAddParty}
+                  >
+                    <Plus className="w-4 h-4 mr-1" />
+                    Add party
+                  </Button>
+                </div>
+
+                {parties.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">
+                    No parties added yet.
+                  </p>
+                ) : (
+                  <div className="space-y-2">
+                    {parties.map((p, index) => (
+                      <div
+                        key={index}
+                        className="border rounded-md p-3 grid grid-cols-1 md:grid-cols-[minmax(0,2fr)_minmax(0,2fr)_auto] gap-3"
+                      >
+                        {/* Party identity */}
+                        <div className="space-y-2">
+                          <Label className="text-xs">Name</Label>
+                          <Input
+                            value={p.name}
+                            onChange={(e) =>
+                              handleUpdateParty(index, { name: e.target.value })
+                            }
+                            placeholder="Party name"
+                          />
+                          <div className="grid grid-cols-2 gap-2">
+                            <div className="space-y-1">
+                              <Label className="text-[11px]">Role</Label>
+                              <select
+                                className="border rounded-md px-2 py-1 text-xs w-full bg-background"
+                                value={p.role}
+                                onChange={(e) =>
+                                  handleUpdateParty(index, {
+                                    role: e.target.value as UnderwritingPartyInput["role"],
+                                  })
+                                }
+                              >
+                                <option value="debtor">Debtor</option>
+                                <option value="guarantor">Guarantor</option>
+                                <option value="vassalee">Vassalee</option>
+                                <option value="other">Other</option>
+                              </select>
+                            </div>
+                            <div className="space-y-1">
+                              <Label className="text-[11px]">Type</Label>
+                              <select
+                                className="border rounded-md px-2 py-1 text-xs w-full bg-background"
+                                value={p.type}
+                                onChange={(e) =>
+                                  handleUpdateParty(index, {
+                                    type: e.target.value as UnderwritingPartyInput["type"],
+                                  })
+                                }
+                              >
+                                <option value="individual">Individual</option>
+                                <option value="business">Business</option>
+                                <option value="bank">Bank</option>
+                                <option value="other">Other</option>
+                              </select>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Party economics */}
+                        <div className="grid grid-cols-2 gap-2">
+                          <div className="space-y-1">
+                            <Label className="text-[11px]">Tax bracket (%)</Label>
+                            <Input
+                              type="number"
+                              min="0"
+                              max="100"
+                              step="0.1"
+                              value={p.taxBracketPct ?? ""}
+                              onChange={(e) =>
+                                handleUpdateParty(index, {
+                                  taxBracketPct: e.target.value
+                                    ? Number(e.target.value)
+                                    : null,
+                                })
+                              }
+                              placeholder="e.g. 35"
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <Label className="text-[11px]">Annual revenue</Label>
+                            <Input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              value={p.annualRevenue ?? ""}
+                              onChange={(e) =>
+                                handleUpdateParty(index, {
+                                  annualRevenue: e.target.value
+                                    ? Number(e.target.value)
+                                    : null,
+                                })
+                              }
+                              placeholder="e.g. 1000000"
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <Label className="text-[11px]">Attached asset value</Label>
+                            <Input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              value={p.attachedAssetValue ?? ""}
+                              onChange={(e) =>
+                                handleUpdateParty(index, {
+                                  attachedAssetValue: e.target.value
+                                    ? Number(e.target.value)
+                                    : null,
+                                })
+                              }
+                              placeholder="e.g. 750000"
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <Label className="text-[11px]">
+                              Risk mgmt / insurance
+                            </Label>
+                            <Input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              value={p.riskManagementCoverage ?? ""}
+                              onChange={(e) =>
+                                handleUpdateParty(index, {
+                                  riskManagementCoverage: e.target.value
+                                    ? Number(e.target.value)
+                                    : null,
+                                })
+                              }
+                              placeholder="e.g. 250000"
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <Label className="text-[11px]">
+                              Expected collection (%) for this party
+                            </Label>
+                            <Input
+                              type="number"
+                              min="0"
+                              max="100"
+                              step="0.1"
+                              value={p.expectedCollectionPct ?? ""}
+                              onChange={(e) =>
+                                handleUpdateParty(index, {
+                                  expectedCollectionPct: e.target.value
+                                    ? Number(e.target.value)
+                                    : null,
+                                })
+                              }
+                              placeholder="e.g. 50"
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <Label className="text-[11px]">Notes</Label>
+                            <Textarea
+                              rows={2}
+                              className="text-[11px]"
+                              value={p.notes ?? ""}
+                              onChange={(e) =>
+                                handleUpdateParty(index, {
+                                  notes: e.target.value || null,
+                                })
+                              }
+                              placeholder="Licenses, associations, filings specific to this party."
+                            />
+                          </div>
+                        </div>
+
+                        {/* Controls */}
+                        <div className="flex flex-col items-end justify-between gap-2">
+                          <Badge variant="outline" className="text-[10px]">
+                            Party {index + 1}
+                          </Badge>
+                          <Button
+                            type="button"
+                            size="icon"
+                            variant="ghost"
+                            className="text-destructive"
+                            onClick={() => handleRemoveParty(index)}
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </Button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="flex items-center justify-between gap-4 border-t pt-4">
+                <p className="text-xs text-muted-foreground">
+                  Metrics on the right are computed locally for preview; the backend recomputes
+                  and persists them when you save.
+                </p>
+                <Button type="submit" disabled={createCaseMutation.isPending}>
+                  {createCaseMutation.isPending ? "Saving…" : "Save underwriting case"}
+                </Button>
+              </div>
+            </form>
+          </CardContent>
+        </Card>
+
+        {/* Metrics + saved cases */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Underwriting Metrics</CardTitle>
+            <CardDescription>
+              Real-time preview of 50% rules and multi-party collection scenario.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4 text-sm">
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <p className="text-xs text-muted-foreground">Claim amount</p>
+                <p className="text-xl font-mono font-semibold">
+                  ${metrics.claimAmount.toLocaleString()}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">Base bond amount</p>
+                <p className="text-xl font-mono font-semibold">
+                  {metrics.baseBondAmount != null
+                    ? `$${metrics.baseBondAmount.toLocaleString()}`
+                    : "—"}
+                </p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-3 gap-4">
+              <div>
+                <p className="text-xs text-muted-foreground">Attached assets (50%)</p>
+                <p className="text-[11px]">
+                  Total: ${metrics.attachedAssetsValue.toLocaleString()}
+                </p>
+                <p className="text-lg font-mono font-semibold">
+                  ≈ ${metrics.estimatedAssetRecovery.toLocaleString()}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">Vassalees revenue (50%)</p>
+                <p className="text-[11px]">
+                  Total: ${metrics.vassaleesAnnualRevenue.toLocaleString()}
+                </p>
+                <p className="text-lg font-mono font-semibold">
+                  ≈ ${metrics.estimatedRevenueRecovery.toLocaleString()}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">Risk mgmt / insurance (50%)</p>
+                <p className="text-[11px]">
+                  Total: ${metrics.riskManagementCoverage.toLocaleString()}
+                </p>
+                <p className="text-lg font-mono font-semibold">
+                  ≈ ${metrics.estimatedInsuranceRecovery.toLocaleString()}
+                </p>
+              </div>
+            </div>
+
+            <div className="border rounded-md p-3 space-y-1">
+              <p className="text-xs text-muted-foreground">
+                Combined recovery from 50% rules
+              </p>
+              <p className="text-xl font-mono font-semibold">
+                ${metrics.estimatedTotalRecovery.toLocaleString()}
+              </p>
+            </div>
+
+            <div className="border rounded-md p-3 space-y-1">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-xs text-muted-foreground">Multi-party collection</p>
+                <Badge variant="outline" className="text-[10px]">
+                  Parties: {metrics.partiesCount}
+                </Badge>
+              </div>
+              <p className="text-[11px]">
+                Total claims across parties: ${metrics.totalMultiPartyClaims.toLocaleString()}
+              </p>
+              <p className="text-[11px]">
+                Avg collection % across parties:{" "}
+                {metrics.averagePartyCollectionPct != null
+                  ? `${metrics.averagePartyCollectionPct.toFixed(1)}%`
+                  : "n/a"}
+              </p>
+              <p className="text-[11px]">
+                Estimated collection from parties: $
+                {metrics.estimatedCollectionFromParties.toLocaleString()}
+              </p>
+              <p className="text-[11px]">
+                As % of original claim:{" "}
+                {metrics.collectionAsPctOfClaim != null
+                  ? `${(metrics.collectionAsPctOfClaim * 100).toFixed(1)}%`
+                  : "n/a"}
+              </p>
+              {metrics.isCollectionGreaterThanClaim != null && (
+                <p className="text-[11px]">
+                  This scenario{" "}
+                  {metrics.isCollectionGreaterThanClaim ? "can reach or exceed" : "does not reach"}{" "}
+                  100% of the original claim when aggregating across all parties.
+                </p>
+              )}
+            </div>
+
+            <div className="border-t pt-3 space-y-2">
+              <p className="text-xs text-muted-foreground">Saved underwriting cases</p>
+              {casesQuery.isLoading ? (
+                <p className="text-xs text-muted-foreground">Loading cases…</p>
+              ) : casesQuery.data && casesQuery.data.length > 0 ? (
+                <div className="space-y-1 max-h-40 overflow-y-auto">
+                  {casesQuery.data.map((c) => (
+                    <button
+                      key={c.id}
+                      type="button"
+                      className={cn(
+                        "w-full text-left text-xs px-2 py-1 rounded-md border hover:bg-accent",
+                        selectedCase?.id === c.id && "border-primary bg-accent",
+                      )}
+                      onClick={() => setSelectedCase(c)}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-medium truncate">{c.caseInput.title}</span>
+                        <span className="text-[10px] text-muted-foreground">
+                          ${c.metrics.claimAmount.toLocaleString()}
+                        </span>
+                      </div>
+                      <p className="text-[10px] text-muted-foreground truncate">
+                        Debtor: {c.caseInput.primaryDebtorName}
+                      </p>
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  No underwriting cases saved yet.
+                </p>
+              )}
+
+              {selectedCase?.narrative && (
+                <div className="border rounded-md p-3 mt-2 bg-muted/40">
+                  <p className="text-xs font-semibold mb-1">
+                    AI underwriting narrative
+                  </p>
+                  <p className="text-xs whitespace-pre-wrap">
+                    {selectedCase.narrative}
+                  </p>
+                </div>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+6. OpenAPI Snippet – server/openapi.underwriting.yml
+
+Merge this into your main server/openapi.yml:
+
+openapi: 3.0.3
+info:
+  title: BondAI – Underwriting Feature Snippet
+  version: "1.0.0"
+
+paths:
+  /api/underwriting/cases:
+    get:
+      summary: List underwriting cases
+      tags: [Underwriting]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Underwriting cases
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/UnderwritingCaseWithMetrics"
+        "401":
+          description: Unauthorized
+    post:
+      summary: Create underwriting case
+      tags: [Underwriting]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UnderwritingCreateRequest"
+      responses:
+        "201":
+          description: Created underwriting case
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UnderwritingCaseWithMetrics"
+        "400":
+          description: Validation error
+        "401":
+          description: Unauthorized
+        "500":
+          description: Internal server error
+
+components:
+  schemas:
+    UnderwritingPartyInput:
+      type: object
+      properties:
+        name: { type: string }
+        role:
+          type: string
+          enum: [debtor, guarantor, vassalee, other]
+        type:
+          type: string
+          enum: [individual, business, bank, other]
+        taxBracketPct:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 100
+          nullable: true
+        annualRevenue:
+          type: number
+          format: double
+          nullable: true
+        attachedAssetValue:
+          type: number
+          format: double
+          nullable: true
+        riskManagementCoverage:
+          type: number
+          format: double
+          nullable: true
+        expectedCollectionPct:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 100
+          nullable: true
+        notes:
+          type: string
+          nullable: true
+      required: [name, role, type]
+
+    UnderwritingCaseInput:
+      type: object
+      properties:
+        title: { type: string }
+        primaryDebtorName: { type: string }
+        claimAmount:
+          type: number
+          format: double
+        baseBondAmount:
+          type: number
+          format: double
+          nullable: true
+        attachedAssetsValue:
+          type: number
+          format: double
+          nullable: true
+        vassaleesAnnualRevenue:
+          type: number
+          format: double
+          nullable: true
+        riskManagementCoverage:
+          type: number
+          format: double
+          nullable: true
+        finalNoticeToPerfectBondDate:
+          type: string
+          format: date-time
+          nullable: true
+        secondFilingDate:
+          type: string
+          format: date-time
+          nullable: true
+        creditBankingSummary:
+          type: string
+          nullable: true
+        addressesSummary:
+          type: string
+          nullable: true
+        licensesAndAssociationsSummary:
+          type: string
+          nullable: true
+        realEstateSummary:
+          type: string
+          nullable: true
+        appraisalSummary:
+          type: string
+          nullable: true
+        highestBestUseSummary:
+          type: string
+          nullable: true
+        loansAndLiensSummary:
+          type: string
+          nullable: true
+        countyFilingsSummary:
+          type: string
+          nullable: true
+        secretaryOfStateSummary:
+          type: string
+          nullable: true
+        riskManagementNotes:
+          type: string
+          nullable: true
+        canPlaceRealEstateLien:
+          type: boolean
+          nullable: true
+        canPlaceBusinessLien:
+          type: boolean
+          nullable: true
+        notes:
+          type: string
+          nullable: true
+      required: [title, primaryDebtorName, claimAmount]
+
+    UnderwritingCreateRequest:
+      type: object
+      properties:
+        caseInput:
+          $ref: "#/components/schemas/UnderwritingCaseInput"
+        parties:
+          type: array
+          items:
+            $ref: "#/components/schemas/UnderwritingPartyInput"
+      required: [caseInput]
+
+    UnderwritingMetrics:
+      type: object
+      properties:
+        claimAmount: { type: number, format: double }
+        baseBondAmount: { type: number, format: double, nullable: true }
+        attachedAssetsValue: { type: number, format: double }
+        assetRecoveryPct: { type: number, format: double }
+        estimatedAssetRecovery: { type: number, format: double }
+        vassaleesAnnualRevenue: { type: number, format: double }
+        revenueRecoveryPct: { type: number, format: double }
+        estimatedRevenueRecovery: { type: number, format: double }
+        riskManagementCoverage: { type: number, format: double }
+        insuranceRecoveryPct: { type: number, format: double }
+        estimatedInsuranceRecovery: { type: number, format: double }
+        estimatedTotalRecovery: { type: number, format: double }
+        partiesCount: { type: integer }
+        averagePartyCollectionPct:
+          type: number
+          format: double
+          nullable: true
+        totalMultiPartyClaims: { type: number, format: double }
+        estimatedCollectionFromParties: { type: number, format: double }
+        collectionAsPctOfClaim:
+          type: number
+          format: double
+          nullable: true
+        isCollectionGreaterThanClaim:
+          type: boolean
+          nullable: true
+      required:
+        - claimAmount
+        - attachedAssetsValue
+        - assetRecoveryPct
+        - estimatedAssetRecovery
+        - vassaleesAnnualRevenue
+        - revenueRecoveryPct
+        - estimatedRevenueRecovery
+        - riskManagementCoverage
+        - insuranceRecoveryPct
+        - estimatedInsuranceRecovery
+        - estimatedTotalRecovery
+        - partiesCount
+        - totalMultiPartyClaims
+        - estimatedCollectionFromParties
+
+    UnderwritingCaseWithMetrics:
+      type: object
+      properties:
+        id: { type: integer }
+        ownerId: { type: integer }
+        caseInput:
+          $ref: "#/components/schemas/UnderwritingCaseInput"
+        parties:
+          type: array
+          items:
+            $ref: "#/components/schemas/UnderwritingPartyInput"
+        metrics:
+          $ref: "#/components/schemas/UnderwritingMetrics"
+        narrative:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+      required: [id, ownerId, caseInput, parties, metrics, createdAt]
+
+7. Patch Notes – docs/UNDERWRITING_PATCH_NOTES.md
+# UNDERWRITING Feature – Integration Notes
+
+This explains how to wire the Underwriting feature into your BondAI app.
+
+## 1. Files to copy
+
+From this pack, copy:
+
+- `server/services/underwritingService.ts` → `server/services/underwritingService.ts`
+- `server/services/routes.underwriting-snippet.ts` → merge into `server/routes.ts`
+- `client/src/pages/underwriting.tsx` → `client/src/pages/underwriting.tsx`
+- `server/openapi.underwriting.yml` → merge into `server/openapi.yml`
+- `README_UNDERWRITING.md` and this file → wherever you keep docs.
+
+## 2. Drizzle schema
+
+In `shared/schema.ts`, add tables like:
+
+```ts
+export const underwritingCases = pgTable("underwriting_cases", {
+  id: serial("id").primaryKey(),
+  ownerId: integer("owner_id").notNull().references(() => users.id),
+  title: varchar("title", { length: 255 }).notNull(),
+  primaryDebtorName: varchar("primary_debtor_name", { length: 255 }).notNull(),
+  claimAmount: decimal("claim_amount", { precision: 18, scale: 2 }).notNull(),
+  baseBondAmount: decimal("base_bond_amount", { precision: 18, scale: 2 }),
+
+  attachedAssetsValue: decimal("attached_assets_value", { precision: 18, scale: 2 }),
+  vassaleesAnnualRevenue: decimal("vassalees_annual_revenue", {
+    precision: 18,
+    scale: 2,
+  }),
+  riskManagementCoverage: decimal("risk_management_coverage", {
+    precision: 18,
+    scale: 2,
+  }),
+
+  finalNoticeToPerfectBondDate: timestamp(
+    "final_notice_to_perfect_bond_date",
+    { withTimezone: true },
+  ),
+  secondFilingDate: timestamp("second_filing_date", { withTimezone: true }),
+
+  creditBankingSummary: text("credit_banking_summary"),
+  addressesSummary: text("addresses_summary"),
+  licensesAndAssociationsSummary: text("licenses_and_associations_summary"),
+  realEstateSummary: text("real_estate_summary"),
+  appraisalSummary: text("appraisal_summary"),
+  highestBestUseSummary: text("highest_best_use_summary"),
+  loansAndLiensSummary: text("loans_and_liens_summary"),
+  countyFilingsSummary: text("county_filings_summary"),
+  secretaryOfStateSummary: text("secretary_of_state_summary"),
+  riskManagementNotes: text("risk_management_notes"),
+  canPlaceRealEstateLien: boolean("can_place_real_estate_lien"),
+  canPlaceBusinessLien: boolean("can_place_business_lien"),
+  notes: text("notes"),
+
+  // Metric snapshots
+  estimatedAssetRecovery: decimal("estimated_asset_recovery", {
+    precision: 18,
+    scale: 2,
+  }),
+  estimatedRevenueRecovery: decimal("estimated_revenue_recovery", {
+    precision: 18,
+    scale: 2,
+  }),
+  estimatedInsuranceRecovery: decimal("estimated_insurance_recovery", {
+    precision: 18,
+    scale: 2,
+  }),
+  estimatedTotalRecovery: decimal("estimated_total_recovery", {
+    precision: 18,
+    scale: 2,
+  }),
+  partiesCount: integer("parties_count"),
+  averagePartyCollectionPct: decimal("average_party_collection_pct", {
+    precision: 5,
+    scale: 2,
+  }),
+  totalMultiPartyClaims: decimal("total_multi_party_claims", {
+    precision: 18,
+    scale: 2,
+  }),
+  estimatedCollectionFromParties: decimal("estimated_collection_from_parties", {
+    precision: 18,
+    scale: 2,
+  }),
+  collectionAsPctOfClaim: decimal("collection_as_pct_of_claim", {
+    precision: 8,
+    scale: 4,
+  }),
+  isCollectionGreaterThanClaim: boolean("is_collection_greater_than_claim"),
+
+  narrative: text("narrative"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const underwritingParties = pgTable("underwriting_parties", {
+  id: serial("id").primaryKey(),
+  caseId: integer("case_id")
+    .notNull()
+    .references(() => underwritingCases.id, { onDelete: "cascade" }),
+  ownerId: integer("owner_id").notNull().references(() => users.id),
+  name: varchar("name", { length: 255 }).notNull(),
+  role: varchar("role", { length: 50 }).notNull(),
+  type: varchar("type", { length: 50 }).notNull(),
+  taxBracketPct: decimal("tax_bracket_pct", { precision: 5, scale: 2 }),
+  annualRevenue: decimal("annual_revenue", { precision: 18, scale: 2 }),
+  attachedAssetValue: decimal("attached_asset_value", { precision: 18, scale: 2 }),
+  riskManagementCoverage: decimal("risk_management_coverage", {
+    precision: 18,
+    scale: 2,
+  }),
+  expectedCollectionPct: decimal("expected_collection_pct", {
+    precision: 5,
+    scale: 2,
+  }),
+  notes: text("notes"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+
+Add relations and types as usual.
+
+Create a migration (e.g. db/migrations/00X_underwriting.sql) reflecting the same schema.
+
+3. Storage
+
+In server/storage.ts, add functions such as:
+
+getUnderwritingCases(ownerId: number): Promise<UnderwritingCaseWithMetricsRow[]>;
+
+createUnderwritingCaseWithPartiesAndMetrics(
+  ownerId: number,
+  caseInput: UnderwritingCaseInput,
+  parties: UnderwritingPartyInput[],
+  metrics: UnderwritingMetrics,
+  narrative?: string,
+): Promise<UnderwritingCaseWithMetricsRow>;
+
+
+Where UnderwritingCaseWithMetricsRow matches the shape the React page expects.
+
+4. Routes
+
+In server/routes.ts:
+
+import { registerUnderwritingRoutes } from "./services/routes.underwriting-snippet";
+
+export function registerRoutes(app: Express) {
+  // ...existing routes
+  registerUnderwritingRoutes(app);
+}
+
+
+Ensure authMiddleware, storage, and zod are already set up (they are in your app).
+
+5. Frontend routing
+
+In your client router (client/src/App.tsx or equivalent):
+
+import UnderwritingPage from "@/pages/underwriting";
+
+// Inside your routes
+<Route path="/underwriting">
+  <AuthedLayout>
+    <UnderwritingPage />
+  </AuthedLayout>
+</Route>
+
+
+Add a sidebar link:
+
+{
+  title: "Underwriting",
+  href: "/underwriting",
+  icon: /* e.g. Scale icon */,
+}
+
+6. Replit-ready behavior
+
+All logic is TypeScript/React/Node and works with your existing stack.
+
+The AI narrative uses your configured OpenAI key; if not configured, it safely returns null.
+
+All metrics are computed strictly from real data you enter—no mock data, no fabricated values.
+
+Once integrated, your Replit app will:
+
+Show an Underwriting nav item.
+
+Let you enter all underwriting checklist information.
+
+Compute numeric metrics.
+
+Persist the case + parties + metrics.
+
+Generate an AI narrative you can show on the dashboard or export later.
+
+
+---
+
+### How to turn this into a zip
+
+1. On your machine, create a folder called `UnderwritingFeaturePack`.
+2. Inside it, recreate the paths and files exactly as above.
+3. Zip the folder into `UnderwritingFeaturePack.zip`.
+4. Upload that zip into your Replit BondAI workspace and merge/overwrite the matching paths.
+5. Run migrations, start the app, and navigate to `/underwriting`.

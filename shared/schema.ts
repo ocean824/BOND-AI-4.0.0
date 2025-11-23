@@ -153,6 +153,24 @@ export const trendingSummaries = pgTable("trending_summaries", {
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
+// Underwriting cases and parties
+export const underwritingCases = pgTable("underwriting_cases", {
+  id: serial("id").primaryKey(),
+  ownerId: integer("owner_id").notNull().references(() => users.id),
+  caseInput: jsonb("case_input").notNull().$type<Record<string, unknown>>(),
+  metrics: jsonb("metrics").notNull().$type<Record<string, unknown>>(),
+  narrative: text("narrative"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const underwritingParties = pgTable("underwriting_parties", {
+  id: serial("id").primaryKey(),
+  caseId: integer("case_id").notNull().references(() => underwritingCases.id, { onDelete: "cascade" }),
+  partyData: jsonb("party_data").notNull().$type<Record<string, unknown>>(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
 // Relations
 export const usersRelations = relations(users, ({ many }) => ({
   judgments: many(judgments),
@@ -249,6 +267,21 @@ export const trendingSummariesRelations = relations(trendingSummaries, ({ one })
   }),
 }));
 
+export const underwritingCasesRelations = relations(underwritingCases, ({ one, many }) => ({
+  owner: one(users, {
+    fields: [underwritingCases.ownerId],
+    references: [users.id],
+  }),
+  parties: many(underwritingParties),
+}));
+
+export const underwritingPartiesRelations = relations(underwritingParties, ({ one }) => ({
+  case: one(underwritingCases, {
+    fields: [underwritingParties.caseId],
+    references: [underwritingCases.id],
+  }),
+}));
+
 // Insert schemas and types
 export const insertUserSchema = createInsertSchema(users).omit({
   id: true,
@@ -332,6 +365,17 @@ export const insertTrendingSummarySchema = createInsertSchema(trendingSummaries)
   createdAt: true,
 });
 
+export const insertUnderwritingCaseSchema = createInsertSchema(underwritingCases).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertUnderwritingPartySchema = createInsertSchema(underwritingParties).omit({
+  id: true,
+  createdAt: true,
+});
+
 // ===== REAL DATA VALIDATION SCHEMAS =====
 // These schemas enforce the "real data only" policy by requiring critical fields
 // and rejecting requests with incomplete data instead of allowing null/undefined values.
@@ -398,6 +442,12 @@ export type InsertTrendingTopic = z.infer<typeof insertTrendingTopicSchema>;
 
 export type TrendingSummary = typeof trendingSummaries.$inferSelect;
 export type InsertTrendingSummary = z.infer<typeof insertTrendingSummarySchema>;
+
+export type UnderwritingCase = typeof underwritingCases.$inferSelect;
+export type InsertUnderwritingCase = z.infer<typeof insertUnderwritingCaseSchema>;
+
+export type UnderwritingParty = typeof underwritingParties.$inferSelect;
+export type InsertUnderwritingParty = z.infer<typeof insertUnderwritingPartySchema>;
 
 // Additional types for API responses
 export type PricingScenario = {
