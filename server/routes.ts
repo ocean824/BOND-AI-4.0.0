@@ -899,6 +899,60 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Update only the AI-derived bond score + risk tier
+  app.patch("/api/bonds/:id/score", authMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const bondId = Number(req.params.id);
+      if (!Number.isFinite(bondId)) {
+        return res.status(400).json({ error: "Invalid bond id" });
+      }
+
+      const bond = await storage.getBond(bondId);
+      if (!bond) {
+        return res.status(404).json({ error: "Bond not found" });
+      }
+
+      // Verify ownership (admin bypass)
+      if (bond.ownerId !== req.user!.id && req.user!.role !== "admin") {
+        return res.status(403).json({ error: "Forbidden" });
+      }
+
+      const ScoreSchema = z.object({
+        bondScore: z.number().int().min(0).max(100),
+        riskTier: z.enum(["low", "moderate", "high"]).optional(),
+      });
+
+      const parsed = ScoreSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({
+          error: "Invalid score payload",
+          details: parsed.error.flatten(),
+        });
+      }
+
+      const { bondScore, riskTier } = parsed.data;
+
+      // Derive risk tier from score if not provided
+      const derivedTier: "low" | "moderate" | "high" =
+        riskTier ??
+        (bondScore >= 70
+          ? "low"
+          : bondScore < 40
+          ? "high"
+          : "moderate");
+
+      const updated = await storage.updateBond(bondId, {
+        bondScore,
+        riskTier: derivedTier,
+      });
+
+      return res.json(updated);
+    } catch (error) {
+      console.error("Update bond score error:", error);
+      return res.status(500).json({ error: "Failed to update bond score" });
+    }
+  });
+
   // Draft bond document using AI
   app.post("/api/bonds/:id/draft", authMiddleware, async (req: AuthRequest, res) => {
     try {
