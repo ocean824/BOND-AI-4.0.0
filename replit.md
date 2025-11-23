@@ -42,7 +42,7 @@ Preferred communication style: Simple, everyday language.
 
 ### AI Integration
 - **Provider**: OpenAI API (via Replit AI Integrations).
-- **Model**: GPT-5 for extraction, chat, bond drafting, and document summarization.
+- **Model**: GPT-4o for extraction, chat, bond drafting, and document summarization.
 - **Judgment Extraction**: Structured data extraction from legal judgment documents (PDF/DOCX) via drag-and-drop, populating form fields.
 - **Bond Document Drafting**: AI-assisted generation of bond term sheets, indenture outlines, and summaries using real bond data.
 - **Document Summarization**: Automatic summarization and tag extraction for uploaded bond documents.

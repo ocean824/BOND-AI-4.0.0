@@ -59,7 +59,7 @@ export async function summarizeBondDocumentFromFile(
   const truncated = text.length > 16000 ? text.slice(0, 16000) : text;
 
   const completion = await openai.chat.completions.create({
-    model: "gpt-5",
+    model: "gpt-4o",
     response_format: { type: "json_object" },
     messages: [
       {

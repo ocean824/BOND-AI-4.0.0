@@ -47,7 +47,7 @@ ${rawText}
 Return JSON only:`;
 
     const response = await openai.chat.completions.create({
-      model: "gpt-5", // the newest OpenAI model is "gpt-5" which was released August 7, 2025. do not change this unless explicitly requested by the user
+      model: "gpt-4o",
       messages: [
         {
           role: "system",
@@ -123,7 +123,7 @@ You help users understand:
 Provide clear, concise, professional guidance. Remember that all AI outputs are for informational purposes only and do not constitute legal or investment advice.`;
 
     const response = await openai.chat.completions.create({
-      model: "gpt-5", // the newest OpenAI model is "gpt-5" which was released August 7, 2025. do not change this unless explicitly requested by the user
+      model: "gpt-4o",
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: context ? `Context: ${context}\n\nQuestion: ${message}` : message }

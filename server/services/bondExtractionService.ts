@@ -153,18 +153,25 @@ ${truncated}
 Return JSON only, no markdown, no comments.
 `.trim();
 
-  const completion = await openai.chat.completions.create({
-    model: "gpt-5",
-    response_format: { type: "json_object" },
-    messages: [
-      { role: "system", content: systemPrompt },
-      { role: "user", content: userPrompt },
-    ],
-    max_completion_tokens: 1024,
-  });
+  let completion;
+  try {
+    completion = await openai.chat.completions.create({
+      model: "gpt-4o",
+      response_format: { type: "json_object" },
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ],
+      max_completion_tokens: 1024,
+    });
+  } catch (error: any) {
+    console.error("OpenAI API error during bond extraction:", error);
+    throw new Error(`OpenAI API error: ${error.message || "Unknown error"}`);
+  }
 
   const content = completion.choices[0]?.message?.content;
   if (!content) {
+    console.error("Empty response from OpenAI. Full completion:", JSON.stringify(completion, null, 2));
     throw new Error("AI bond extraction returned empty response");
   }
 
