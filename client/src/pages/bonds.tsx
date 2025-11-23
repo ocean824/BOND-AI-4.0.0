@@ -67,6 +67,26 @@ type BondExtractionResult = {
   warnings: string[];
 };
 
+function getRiskTierClasses(tier: Bond["riskTier"]): string {
+  if (!tier) return "bg-slate-100 text-slate-800 dark:bg-slate-800 dark:text-slate-200";
+
+  switch (tier) {
+    case "low":
+      return "bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200";
+    case "moderate":
+      return "bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200";
+    case "high":
+      return "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200";
+    default:
+      return "bg-slate-100 text-slate-800 dark:bg-slate-800 dark:text-slate-200";
+  }
+}
+
+function formatBondScore(score: number | null): string {
+  if (score == null) return "Not scored";
+  return `${score}/100`;
+}
+
 export default function BondsPage() {
   const { toast } = useToast();
 
@@ -274,6 +294,12 @@ export default function BondsPage() {
         jurisdiction: "",
         governingLaw: "",
       });
+      
+      // Clear AI extraction preview to prevent stale data in next bond
+      setBondScorePreview(null);
+      setBondRiskTierPreview(null);
+      setBondExtractionWarnings([]);
+      
       toast({
         title: "Bond created",
         description: "Your bond instrument was created successfully.",
@@ -605,6 +631,7 @@ export default function BondsPage() {
                       "w-full text-left px-3 py-2 rounded-md border text-sm hover:bg-accent",
                       selectedBond?.id === bond.id && "border-primary bg-accent"
                     )}
+                    data-testid={`bond-card-${bond.id}`}
                   >
                     <div className="flex items-center justify-between gap-2">
                       <div>
@@ -613,7 +640,32 @@ export default function BondsPage() {
                           {bond.cusip || bond.isin || "No CUSIP/ISIN set"}
                         </p>
                       </div>
-                      {bond.status && <Badge variant="outline">{bond.status}</Badge>}
+                      <div className="flex items-center gap-1.5">
+                        {bond.bondScore != null ? (
+                          <Badge
+                            className={cn(
+                              "text-xs font-medium px-2 py-0.5 rounded-full",
+                              getRiskTierClasses(bond.riskTier)
+                            )}
+                            data-testid={`bond-score-badge-${bond.id}`}
+                          >
+                            {formatBondScore(bond.bondScore)}
+                            {bond.riskTier && (
+                              <span className="ml-1 capitalize">
+                                ({bond.riskTier})
+                              </span>
+                            )}
+                          </Badge>
+                        ) : (
+                          <Badge 
+                            className="bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300 text-xs"
+                            data-testid={`bond-score-badge-${bond.id}`}
+                          >
+                            Not scored
+                          </Badge>
+                        )}
+                        {bond.status && <Badge variant="outline">{bond.status}</Badge>}
+                      </div>
                     </div>
                     <p className="mt-1 text-xs text-muted-foreground">
                       Face value:{" "}
