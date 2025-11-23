@@ -24,13 +24,13 @@ Preferred communication style: Simple, everyday language.
 - **Request Flow**: Express middleware for context, auth, and parsing.
 - **Error Handling**: Centralized with typed error classes.
 - **Validation**: Zod schemas.
-- **Service Layer**: Business logic separated into modules (AI extraction, pricing, assistant).
+- **Service Layer**: Business logic separated into modules (AI extraction, pricing, underwriting, assistant).
 - **API Documentation**: OpenAPI specification.
 
 ### Database Architecture
 - **ORM**: Drizzle ORM.
 - **Database**: PostgreSQL (Neon serverless driver).
-- **Schema Design**: Includes users (role-based), judgments, bundles (with tranche assignments), price estimates, bonds (with financial instrument details), bond documents (with AI summarization/tagging), chat sessions, recovery scores, trending topics (with AI summaries).
+- **Schema Design**: Includes users (role-based), judgments, bundles (with tranche assignments), price estimates, bonds (with financial instrument details), bond documents (with AI summarization/tagging), chat sessions, recovery scores, trending topics (with AI summaries), underwriting cases and parties (multi-party risk assessment).
 - **Migrations**: SQL-based via Drizzle Kit.
 - **Seeding**: Admin user account only.
 
@@ -60,6 +60,18 @@ Preferred communication style: Simple, everyday language.
 ### Bundle & Tranche System
 - **Functionality**: Create named investment bundles, assign judgments with tranche designations (senior, mezz, equity), aggregate financial values, remove judgments.
 - **Security**: Ownership verification for all bundle operations.
+
+### Underwriting System
+- **Functionality**: Multi-party judgment debt risk assessment with comprehensive underwriting checklist.
+- **Recovery Rules**: Automated 50% recovery calculations for attached assets, vassalees' annual revenue, and risk management insurance coverage.
+- **Multi-Party Analysis**: Computes collection estimates across multiple parties (debtors, guarantors, vassalees) with average collection percentages.
+- **AI Narrative Generation**: GPT-4o generates plain-English summaries explaining underwriting metrics and risk assessment.
+- **Database Tables**: `underwriting_cases` stores case details, metrics, and narratives; `underwriting_parties` stores individual party data with JSONB flexibility.
+- **API Endpoints**:
+  - `GET /api/underwriting/cases` - Fetch all underwriting cases (admin sees all, users see own)
+  - `POST /api/underwriting/cases` - Create new case with parties, metrics, and AI narrative
+- **Frontend**: Comprehensive form with real-time metrics preview, party management, qualitative notes, and saved cases view.
+- **Security**: Ownership verification with admin override for universal access.
 
 ### Bond Management System
 - **Functionality**: Create and manage bonds with comprehensive metadata (CUSIP, ISIN, coupon, maturity, etc.).
