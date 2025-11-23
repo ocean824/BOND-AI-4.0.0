@@ -27,6 +27,12 @@ import {
   chatMessages,
   type ChatMessage,
   type InsertChatMessage,
+  underwritingCases,
+  type UnderwritingCase,
+  type InsertUnderwritingCase,
+  underwritingParties,
+  type UnderwritingParty,
+  type InsertUnderwritingParty,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, desc } from "drizzle-orm";
@@ -76,6 +82,16 @@ export interface IStorage {
   createChatSession(session: InsertChatSession): Promise<ChatSession>;
   getChatMessages(sessionId: number): Promise<ChatMessage[]>;
   createChatMessage(message: InsertChatMessage): Promise<ChatMessage>;
+  
+  // Underwriting
+  getUnderwritingCases(ownerId?: number): Promise<any[]>;
+  createUnderwritingCaseWithPartiesAndMetrics(
+    ownerId: number,
+    caseInput: any,
+    parties: any[],
+    metrics: any,
+    narrative?: string
+  ): Promise<any>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -281,6 +297,77 @@ export class DatabaseStorage implements IStorage {
   async createChatMessage(message: InsertChatMessage): Promise<ChatMessage> {
     const [created] = await db.insert(chatMessages).values(message).returning();
     return created;
+  }
+
+  // Underwriting
+  async getUnderwritingCases(ownerId?: number): Promise<any[]> {
+    if (ownerId === undefined) {
+      // Admin: return all cases
+      const cases = await db.select().from(underwritingCases).orderBy(desc(underwritingCases.createdAt));
+      const result = [];
+      for (const c of cases) {
+        const parties = await db.select().from(underwritingParties).where(eq(underwritingParties.caseId, c.id));
+        result.push({
+          id: c.id,
+          ownerId: c.ownerId,
+          caseInput: c.caseInput,
+          metrics: c.metrics,
+          narrative: c.narrative,
+          createdAt: c.createdAt,
+          parties: parties.map(p => p.partyData),
+        });
+      }
+      return result;
+    }
+    const cases = await db.select().from(underwritingCases).where(eq(underwritingCases.ownerId, ownerId)).orderBy(desc(underwritingCases.createdAt));
+    const result = [];
+    for (const c of cases) {
+      const parties = await db.select().from(underwritingParties).where(eq(underwritingParties.caseId, c.id));
+      result.push({
+        id: c.id,
+        ownerId: c.ownerId,
+        caseInput: c.caseInput,
+        metrics: c.metrics,
+        narrative: c.narrative,
+        createdAt: c.createdAt,
+        parties: parties.map(p => p.partyData),
+      });
+    }
+    return result;
+  }
+
+  async createUnderwritingCaseWithPartiesAndMetrics(
+    ownerId: number,
+    caseInput: any,
+    parties: any[],
+    metrics: any,
+    narrative?: string
+  ): Promise<any> {
+    const [underwritingCase] = await db.insert(underwritingCases).values({
+      ownerId,
+      caseInput,
+      metrics,
+      narrative: narrative || null,
+    }).returning();
+
+    const partyRecords: InsertUnderwritingParty[] = parties.map(p => ({
+      caseId: underwritingCase.id,
+      partyData: p,
+    }));
+
+    if (partyRecords.length > 0) {
+      await db.insert(underwritingParties).values(partyRecords);
+    }
+
+    return {
+      id: underwritingCase.id,
+      ownerId: underwritingCase.ownerId,
+      caseInput: underwritingCase.caseInput,
+      metrics: underwritingCase.metrics,
+      narrative: underwritingCase.narrative,
+      createdAt: underwritingCase.createdAt,
+      parties,
+    };
   }
 }
 

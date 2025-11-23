@@ -1,4 +1,4 @@
-import { Home, FileText, Package, Coins, TrendingUp, MessageCircle, LogOut } from "lucide-react";
+import { Home, FileText, Package, Coins, TrendingUp, Shield, MessageCircle, LogOut } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import {
   Sidebar,
@@ -19,6 +19,7 @@ const menuItems = [
   { title: "Judgments", url: "/judgments", icon: FileText, testId: "nav-judgments" },
   { title: "Bundles", url: "/bundles", icon: Package, testId: "nav-bundles" },
   { title: "Bonds", url: "/bonds", icon: Coins, testId: "nav-bonds" },
+  { title: "Underwriting", url: "/underwriting", icon: Shield, testId: "nav-underwriting" },
   { title: "Investor Metrics", url: "/investor", icon: TrendingUp, testId: "nav-investor" },
 ];
 

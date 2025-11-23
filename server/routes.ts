@@ -9,6 +9,7 @@ import { generateBondDraft } from "./services/bondAiService";
 import { summarizeBondDocumentFromFile } from "./services/bondDocumentAiService";
 import { getTrendingTopics, refreshTrendingTopics } from "./services/trendingService";
 import { extractBondDataFromDocument } from "./services/bondExtractionService";
+import { computeUnderwritingMetrics, generateUnderwritingNarrative } from "./services/underwritingService";
 import bcrypt from "bcryptjs";
 import { z } from "zod";
 import { sql } from "drizzle-orm";
@@ -1221,6 +1222,51 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Get admin stats error:", error);
       res.status(500).json({ error: "Failed to get statistics" });
+    }
+  });
+
+  // ===== UNDERWRITING ROUTES =====
+  app.get("/api/underwriting/cases", authMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const userId = req.user?.id;
+      const isAdmin = req.user?.role === "admin";
+      
+      const cases = await storage.getUnderwritingCases(isAdmin ? undefined : userId);
+      res.json(cases);
+    } catch (error) {
+      console.error("Get underwriting cases error:", error);
+      res.status(500).json({ error: "Failed to fetch underwriting cases" });
+    }
+  });
+
+  app.post("/api/underwriting/cases", authMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const userId = req.user?.id;
+      if (!userId) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+
+      const { caseInput, parties } = req.body;
+      
+      if (!caseInput || !parties || !Array.isArray(parties)) {
+        return res.status(400).json({ error: "Invalid input: caseInput and parties required" });
+      }
+
+      const metrics = computeUnderwritingMetrics(caseInput, parties);
+      const narrative = await generateUnderwritingNarrative(caseInput, parties, metrics);
+
+      const savedCase = await storage.createUnderwritingCaseWithPartiesAndMetrics(
+        userId,
+        caseInput,
+        parties,
+        metrics,
+        narrative || undefined
+      );
+
+      res.status(201).json(savedCase);
+    } catch (error) {
+      console.error("Create underwriting case error:", error);
+      res.status(500).json({ error: "Failed to create underwriting case" });
     }
   });
 

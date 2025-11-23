@@ -14,6 +14,7 @@ import JudgmentsPage from "@/pages/judgments";
 import BundlesPage from "@/pages/bundles";
 import BondsPage from "@/pages/bonds";
 import InvestorDashboardPage from "@/pages/investor-dashboard";
+import UnderwritingPage from "@/pages/underwriting";
 import AdminLoginPage from "@/pages/admin-login";
 import AdminPanelPage from "@/pages/admin-panel";
 import NotFound from "@/pages/not-found";
@@ -75,6 +76,7 @@ function Router() {
         <Route path="/judgments" component={JudgmentsPage} />
         <Route path="/bundles" component={BundlesPage} />
         <Route path="/bonds" component={BondsPage} />
+        <Route path="/underwriting" component={UnderwritingPage} />
         <Route path="/investor" component={InvestorDashboardPage} />
         <Route component={NotFound} />
       </Switch>
