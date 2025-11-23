@@ -46,8 +46,26 @@ type BondDocument = {
   createdAt: string;
 };
 
+type BondExtractionResult = {
+  issuerName: string | null;
+  bondName: string | null;
+  cusip: string | null;
+  isin: string | null;
+  ticker: string | null;
+  faceValue: number | null;
+  currency: string | null;
+  couponRate: number | null;
+  couponType: string | null;
+  maturityDate: string | null;
+  issueDate: string | null;
+  jurisdiction: string | null;
+  governingLaw: string | null;
+  bondScore: number;
+  riskTier: "low" | "moderate" | "high";
+  warnings: string[];
+};
+
 export default function BondsPage() {
-  const { token } = useAuth();
   const { toast } = useToast();
 
   const [bonds, setBonds] = useState<Bond[]>([]);
@@ -58,6 +76,10 @@ export default function BondsPage() {
   const [draft, setDraft] = useState<string>("");
   const [draftLoading, setDraftLoading] = useState(false);
   const [draftInstructions, setDraftInstructions] = useState("");
+  const [extracting, setExtracting] = useState(false);
+  const [bondScorePreview, setBondScorePreview] = useState<number | null>(null);
+  const [bondRiskTierPreview, setBondRiskTierPreview] = useState<string | null>(null);
+  const [bondExtractionWarnings, setBondExtractionWarnings] = useState<string[]>([]);
 
   const [form, setForm] = useState({
     name: "",
@@ -75,6 +97,7 @@ export default function BondsPage() {
   });
 
   function authHeaders(): HeadersInit {
+    const token = localStorage.getItem("auth_token");
     return token ? { Authorization: `Bearer ${token}` } : {};
   }
 
@@ -129,13 +152,87 @@ export default function BondsPage() {
   }
 
   useEffect(() => {
+    const token = localStorage.getItem("auth_token");
     if (token) {
       void loadBonds();
     }
-  }, [token]);
+  }, []);
 
   function handleFormChange<K extends keyof typeof form>(key: K, value: string) {
     setForm((prev) => ({ ...prev, [key]: value }));
+  }
+
+  async function handleExtractFromDocument(
+    e: React.ChangeEvent<HTMLInputElement>
+  ) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setExtracting(true);
+    setBondExtractionWarnings([]);
+
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+
+      const res = await fetch("/api/bonds/extract-from-document", {
+        method: "POST",
+        headers: {
+          ...authHeaders(),
+        },
+        body: formData,
+      });
+
+      if (!res.ok) {
+        const errorText = await res.text();
+        throw new Error(errorText || "Failed to extract bond data");
+      }
+
+      const data = (await res.json()) as BondExtractionResult;
+
+      // Auto-fill the bond creation form with extracted fields
+      setForm((prev) => ({
+        ...prev,
+        name: data.bondName ?? prev.name,
+        cusip: data.cusip ?? prev.cusip,
+        isin: data.isin ?? prev.isin,
+        ticker: data.ticker ?? prev.ticker,
+        faceValue:
+          data.faceValue != null ? String(data.faceValue) : prev.faceValue,
+        currency: data.currency ?? prev.currency,
+        couponRate:
+          data.couponRate != null ? String(data.couponRate) : prev.couponRate,
+        couponType: data.couponType ?? prev.couponType,
+        maturityDate: data.maturityDate ?? prev.maturityDate,
+        issueDate: data.issueDate ?? prev.issueDate,
+        jurisdiction: data.jurisdiction ?? prev.jurisdiction,
+        governingLaw: data.governingLaw ?? prev.governingLaw,
+      }));
+
+      setBondScorePreview(data.bondScore);
+      setBondRiskTierPreview(data.riskTier);
+      setBondExtractionWarnings(data.warnings ?? []);
+
+      toast({
+        title: "Bond data extracted",
+        description:
+          "We auto-filled as many bond fields as we could from the uploaded document.",
+      });
+    } catch (error: any) {
+      console.error(error);
+      toast({
+        title: "Bond extraction failed",
+        description:
+          error instanceof Error
+            ? error.message
+            : "Unable to extract bond data from this file.",
+        variant: "destructive",
+      });
+    } finally {
+      setExtracting(false);
+      // allow re-selecting the same file if needed
+      e.target.value = "";
+    }
   }
 
   async function handleCreateBond(e: React.FormEvent) {
@@ -312,9 +409,41 @@ export default function BondsPage() {
           <CardContent>
             <form className="space-y-4" onSubmit={handleCreateBond}>
               <div className="space-y-2">
+                <Label htmlFor="bond-extract-file">Upload bond PDF/DOCX to auto-fill</Label>
+                <Input
+                  id="bond-extract-file"
+                  data-testid="input-bond-extract-file"
+                  type="file"
+                  accept=".pdf,application/pdf,.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                  onChange={handleExtractFromDocument}
+                  disabled={extracting}
+                />
+                {extracting && (
+                  <p className="text-xs text-muted-foreground">
+                    Analyzing bond document…
+                  </p>
+                )}
+                {bondScorePreview !== null && (
+                  <p className="text-xs text-muted-foreground" data-testid="text-bond-score-preview">
+                    AI bond score:{" "}
+                    <span className="font-semibold">{bondScorePreview}/100</span>{" "}
+                    {bondRiskTierPreview && <>({bondRiskTierPreview} risk)</>}
+                  </p>
+                )}
+                {bondExtractionWarnings.length > 0 && (
+                  <ul className="mt-1 space-y-0.5 text-xs text-amber-600" data-testid="list-bond-warnings">
+                    {bondExtractionWarnings.map((w, idx) => (
+                      <li key={idx}>• {w}</li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+
+              <div className="space-y-2">
                 <Label htmlFor="bond-name">Bond name</Label>
                 <Input
                   id="bond-name"
+                  data-testid="input-bond-name"
                   required
                   value={form.name}
                   onChange={(e) => handleFormChange("name", e.target.value)}

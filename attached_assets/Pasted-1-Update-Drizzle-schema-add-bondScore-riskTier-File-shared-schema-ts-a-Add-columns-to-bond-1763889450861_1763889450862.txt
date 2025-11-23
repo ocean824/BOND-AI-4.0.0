@@ -1,0 +1,334 @@
+1️⃣ Update Drizzle schema – add bondScore + riskTier
+
+File: shared/schema.ts
+
+a) Add columns to bonds table
+
+Find:
+
+export const bonds = pgTable("bonds", {
+  id: serial("id").primaryKey(),
+  ownerId: integer("owner_id").notNull().references(() => users.id),
+  name: varchar("name", { length: 255 }).notNull(),
+  cusip: varchar("cusip", { length: 20 }),
+  isin: varchar("isin", { length: 20 }),
+  ticker: varchar("ticker", { length: 20 }),
+  faceValue: decimal("face_value", { precision: 18, scale: 2 }).notNull(),
+  currency: varchar("currency", { length: 3 }).notNull().default("USD"),
+  couponRate: decimal("coupon_rate", { precision: 6, scale: 3 }),
+  couponType: varchar("coupon_type", { length: 50 }).default("fixed"),
+  maturityDate: timestamp("maturity_date", { withTimezone: true }),
+  issueDate: timestamp("issue_date", { withTimezone: true }),
+  jurisdiction: varchar("jurisdiction", { length: 255 }),
+  governingLaw: varchar("governing_law", { length: 255 }),
+  status: varchar("status", { length: 50 }).notNull().default("draft"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+
+Change it to include the new fields (I’m keeping them nullable so existing bonds don’t break):
+
+export const bonds = pgTable("bonds", {
+  id: serial("id").primaryKey(),
+  ownerId: integer("owner_id").notNull().references(() => users.id),
+  name: varchar("name", { length: 255 }).notNull(),
+  cusip: varchar("cusip", { length: 20 }),
+  isin: varchar("isin", { length: 20 }),
+  ticker: varchar("ticker", { length: 20 }),
+  faceValue: decimal("face_value", { precision: 18, scale: 2 }).notNull(),
+  currency: varchar("currency", { length: 3 }).notNull().default("USD"),
+  couponRate: decimal("coupon_rate", { precision: 6, scale: 3 }),
+  couponType: varchar("coupon_type", { length: 50 }).default("fixed"),
+  maturityDate: timestamp("maturity_date", { withTimezone: true }),
+  issueDate: timestamp("issue_date", { withTimezone: true }),
+  jurisdiction: varchar("jurisdiction", { length: 255 }),
+  governingLaw: varchar("governing_law", { length: 255 }),
+
+  // NEW: AI-derived bond score + risk tier (0–100, low/moderate/high)
+  bondScore: integer("bond_score"), // 0–100, nullable if not yet scored
+  riskTier: varchar("risk_tier", { length: 20 }), // "low" | "moderate" | "high"
+
+  status: varchar("status", { length: 50 }).notNull().default("draft"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+b) Extend insertBondSchema to accept them
+
+Still in shared/schema.ts, find:
+
+export const insertBondSchema = createInsertSchema(bonds, {
+  name: z.string().min(1, "Bond name is required"),
+  faceValue: z
+    .string()
+    .or(z.number())
+    .transform((v) => (typeof v === "string" ? Number(v) : v))
+    .refine((v) => !Number.isNaN(v), "Face value must be a number"),
+}).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+
+Replace with:
+
+export const insertBondSchema = createInsertSchema(bonds, {
+  name: z.string().min(1, "Bond name is required"),
+  faceValue: z
+    .string()
+    .or(z.number())
+    .transform((v) => (typeof v === "string" ? Number(v) : v))
+    .refine((v) => !Number.isNaN(v), "Face value must be a number"),
+
+  // NEW: validate AI-derived score + tier if provided
+  bondScore: z
+    .number()
+    .int()
+    .min(0)
+    .max(100)
+    .optional()
+    .nullable(),
+  riskTier: z
+    .enum(["low", "moderate", "high"])
+    .optional()
+    .nullable(),
+}).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+
+Your TS types at the bottom:
+
+export type Bond = typeof bonds.$inferSelect;
+export type InsertBond = z.infer<typeof insertBondSchema>;
+
+
+will now automatically include bondScore and riskTier (both optional/nullable).
+
+2️⃣ Minimal DB migration (Postgres)
+
+Because you don’t have a migrations directory in this repo, you can run this once against your Postgres (via psql, Replit DB console, or a one-off script):
+
+ALTER TABLE bonds
+  ADD COLUMN IF NOT EXISTS bond_score integer;
+
+ALTER TABLE bonds
+  ADD COLUMN IF NOT EXISTS risk_tier varchar(20);
+
+-- Optional: soft constraints if you want
+-- (you can skip this if you prefer no DB-level checks)
+ALTER TABLE bonds
+  ADD CONSTRAINT bond_score_range
+  CHECK (bond_score IS NULL OR (bond_score >= 0 AND bond_score <= 100));
+
+
+After this, the Drizzle schema and actual DB match.
+
+If you prefer to do this via TS instead of direct SQL, you could also add a tiny one-off script that runs db.execute(sqlALTER TABLE ...), but the SQL above is the essence.
+
+3️⃣ API wiring – /api/bonds create & update
+
+The good news: your routes are already almost good to go.
+
+In server/routes.ts we saw:
+
+// Create new bond
+app.post("/api/bonds", authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const validation = insertBondSchema.safeParse({
+      ...req.body,
+      ownerId: req.user!.id,
+    });
+
+    if (!validation.success) {
+      return res.status(400).json({ 
+        error: "Invalid input", 
+        details: validation.error 
+      });
+    }
+
+    const bond = await storage.createBond(validation.data);
+    res.json(bond);
+  } catch (error) {
+    console.error("Create bond error:", error);
+    res.status(500).json({ error: "Failed to create bond" });
+  }
+});
+
+
+Because we extended insertBondSchema, any bondScore + riskTier fields you send from the frontend will now:
+
+be validated,
+
+pass through to storage.createBond,
+
+and be stored in the bonds table.
+
+The update route is already generic:
+
+// Update bond
+app.patch("/api/bonds/:id", authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const bondId = parseInt(req.params.id);
+    const bond = await storage.getBond(bondId);
+
+    if (!bond) {
+      return res.status(404).json({ error: "Bond not found" });
+    }
+
+    // Verify ownership (admin bypass)
+    if (bond.ownerId !== req.user!.id && req.user!.role !== "admin") {
+      return res.status(403).json({ error: "Forbidden" });
+    }
+
+    const updated = await storage.updateBond(bondId, req.body);
+    res.json(updated);
+  } catch (error) {
+    console.error("Update bond error:", error);
+    res.status(500).json({ error: "Failed to update bond" });
+  }
+});
+
+
+So as soon as the DB has the columns, any PATCH like:
+
+{
+  "bondScore": 82,
+  "riskTier": "low"
+}
+
+
+will update those fields on that bond.
+
+No further change is required on the backend storage layer, because:
+
+async createBond(bond: InsertBond): Promise<Bond> {
+  const [created] = await db.insert(bonds).values(bond).returning();
+  return created;
+}
+
+async updateBond(id: number, data: Partial<InsertBond>): Promise<Bond> {
+  const [updated] = await db
+    .update(bonds)
+    .set({ ...data, updatedAt: new Date() })
+    .where(eq(bonds.id, id))
+    .returning();
+  return updated;
+}
+
+
+already spreads whatever bondScore/riskTier you give it.
+
+4️⃣ Frontend wiring – store the score when creating a bond
+
+To make the extracted score persist, we just need the UI to send it when it calls /api/bonds.
+
+File: client/src/pages/bonds.tsx
+
+a) Extend the Bond type
+
+At the top of the file, update your Bond type:
+
+type Bond = {
+  id: number;
+  name: string;
+  cusip: string | null;
+  isin: string | null;
+  ticker: string | null;
+  faceValue: string | null;
+  currency: string | null;
+  couponRate: string | null;
+  couponType: string | null;
+  maturityDate: string | null;
+  issueDate: string | null;
+  jurisdiction: string | null;
+  governingLaw: string | null;
+  status: string | null;
+
+  // NEW: persisted AI scoring
+  bondScore: number | null;
+  riskTier: "low" | "moderate" | "high" | null;
+};
+
+
+(If you’re importing Bond from @shared/schema somewhere else later, you can switch to that instead, but this local type is fine.)
+
+b) Include the preview score when creating
+
+In the code I previously gave you, we added:
+
+const [bondScorePreview, setBondScorePreview] = useState<number | null>(null);
+const [bondRiskTierPreview, setBondRiskTierPreview] = useState<string | null>(null);
+
+
+and we set them inside handleExtractFromDocument.
+
+Now wire them into handleCreateBond so they’re stored:
+
+Find your existing create call:
+
+async function handleCreateBond(e: React.FormEvent) {
+  e.preventDefault();
+  setCreating(true);
+  try {
+    const res = await fetch("/api/bonds", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...authHeaders(),
+      },
+      body: JSON.stringify({
+        ...form,
+        faceValue: form.faceValue ? Number(form.faceValue) : null,
+        couponRate: form.couponRate ? Number(form.couponRate) : null,
+      }),
+    });
+    ...
+
+
+Change the body to also send the AI score + tier (if present):
+
+      body: JSON.stringify({
+        ...form,
+        faceValue: form.faceValue ? Number(form.faceValue) : null,
+        couponRate: form.couponRate ? Number(form.couponRate) : null,
+
+        // NEW: persist AI-derived score + tier if we have them
+        bondScore: bondScorePreview,
+        riskTier: bondRiskTierPreview,
+      }),
+
+
+That’s it. When you:
+
+Upload a bond PDF/DOCX into the Create Bond card,
+
+Let handleExtractFromDocument run and set bondScorePreview / bondRiskTierPreview,
+
+Hit Create Bond,
+
+the app will now:
+
+POST those values to /api/bonds
+
+pass validation in insertBondSchema
+
+store them in the new bond_score / risk_tier columns
+
+and return them in the created Bond object so you can show them in the UI.
+
+Recap
+
+✅ Schema updated: bonds now has bondScore + riskTier.
+
+✅ Validation updated: insertBondSchema understands them and enforces 0–100 + enum.
+
+✅ DB migration: simple ALTER TABLE to bring Postgres in line.
+
+✅ API wired: existing /api/bonds POST/PATCH now persist those values.
+
+✅ Frontend wired: create flow sends the AI score + tier from the extraction step so they’re saved.

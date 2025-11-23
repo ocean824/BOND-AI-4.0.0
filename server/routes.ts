@@ -8,6 +8,7 @@ import { generateInvestorTeaserPDF } from "./services/pdfGenerationService";
 import { generateBondDraft } from "./services/bondAiService";
 import { summarizeBondDocumentFromFile } from "./services/bondDocumentAiService";
 import { getTrendingTopics, refreshTrendingTopics } from "./services/trendingService";
+import { extractBondDataFromDocument } from "./services/bondExtractionService";
 import bcrypt from "bcryptjs";
 import { z } from "zod";
 import { sql } from "drizzle-orm";
@@ -1019,6 +1020,59 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(500).json({ error: "Failed to search bond documents" });
     }
   });
+
+  // Extract bond fields & AI bond score from a PDF/DOCX without creating the bond yet
+  app.post(
+    "/api/bonds/extract-from-document",
+    authMiddleware,
+    upload.single("file"),
+    async (req: AuthRequest, res) => {
+      try {
+        if (!req.file) {
+          return res.status(400).json({ error: "No file uploaded" });
+        }
+
+        const { path: filePath, mimetype } = req.file;
+
+        const extraction = await extractBondDataFromDocument(filePath, mimetype);
+
+        // Optional: delete the temporary upload if you don't want to keep it
+        await fs.unlink(filePath).catch(() => {});
+
+        return res.json(extraction);
+      } catch (error: any) {
+        console.error("Bond extraction error:", error);
+        
+        // Clean up temporary file on error
+        if (req.file?.path) {
+          await fs.unlink(req.file.path).catch(() => {});
+        }
+        
+        // Check if this is a validation error
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        if (errorMessage.includes("validation failed") || errorMessage.includes("unreadable") || errorMessage.includes("empty")) {
+          return res.status(422).json({
+            error: "Unable to extract valid bond data from document",
+            details: errorMessage,
+          });
+        }
+        
+        // Check if this is a configuration error
+        if (errorMessage.includes("not configured")) {
+          return res.status(503).json({
+            error: "Bond extraction service not available",
+            details: errorMessage,
+          });
+        }
+        
+        // Generic server error
+        return res.status(500).json({
+          error: "Failed to extract bond data from document",
+          details: errorMessage,
+        });
+      }
+    }
+  );
 
   // ===== ADMIN ROUTES =====
   const adminLoginSchema = z.object({
