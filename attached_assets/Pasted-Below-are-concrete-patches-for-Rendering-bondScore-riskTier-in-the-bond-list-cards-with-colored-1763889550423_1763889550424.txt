@@ -1,0 +1,269 @@
+Below are concrete patches for:
+
+Rendering bondScore + riskTier in the bond list cards (with colored badge).
+
+A dedicated PATCH /api/bonds/:id/score endpoint so you (or a future AI job) can re-score a bond without touching other fields.
+
+1️⃣ Backend: PATCH /api/bonds/:id/score
+
+File: server/routes.ts
+
+a) Make sure you have zod imported
+
+At the top (if it’s not there already):
+
+import { z } from "zod";
+
+b) Add the new route under BOND ROUTES
+
+Place this near your other bond routes, but before the admin routes:
+
+  // Update only the AI-derived bond score + risk tier
+  app.patch(
+    "/api/bonds/:id/score",
+    authMiddleware,
+    async (req: AuthRequest, res) => {
+      try {
+        const bondId = Number(req.params.id);
+        if (!Number.isFinite(bondId)) {
+          return res.status(400).json({ error: "Invalid bond id" });
+        }
+
+        const bond = await storage.getBond(bondId);
+        if (!bond) {
+          return res.status(404).json({ error: "Bond not found" });
+        }
+
+        // Ownership / admin check
+        if (bond.ownerId !== req.user!.id && req.user!.role !== "admin") {
+          return res.status(403).json({ error: "Forbidden" });
+        }
+
+        const ScoreSchema = z.object({
+          bondScore: z.number().int().min(0).max(100),
+          // optional riskTier override, otherwise we'll derive it
+          riskTier: z.enum(["low", "moderate", "high"]).optional(),
+        });
+
+        const parsed = ScoreSchema.safeParse(req.body);
+        if (!parsed.success) {
+          return res.status(400).json({
+            error: "Invalid score payload",
+            details: parsed.error.flatten(),
+          });
+        }
+
+        const { bondScore, riskTier } = parsed.data;
+
+        // Keep a single canonical mapping for risk tier
+        const derivedTier: "low" | "moderate" | "high" =
+          riskTier ??
+          (bondScore >= 70
+            ? "low"
+            : bondScore < 40
+            ? "high"
+            : "moderate");
+
+        const updated = await storage.updateBond(bondId, {
+          bondScore,
+          riskTier: derivedTier,
+        });
+
+        return res.json(updated);
+      } catch (error) {
+        console.error("Update bond score error:", error);
+        return res
+          .status(500)
+          .json({ error: "Failed to update bond score" });
+      }
+    }
+  );
+
+
+Now you can:
+
+PATCH /api/bonds/123/score
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "bondScore": 82
+}
+
+
+…and the backend will:
+
+Confirm ownership/admin.
+
+Clamp & validate score 0–100.
+
+Derive riskTier based on your mapping.
+
+Persist both fields in the bonds table.
+
+2️⃣ Frontend: show bondScore + riskTier in the bond list
+
+File: client/src/pages/bonds.tsx
+
+You already extended the Bond type to:
+
+type Bond = {
+  // ...
+  bondScore: number | null;
+  riskTier: "low" | "moderate" | "high" | null;
+};
+
+
+Now we’ll:
+
+Add a small helper for color classes.
+
+Render a badge in each bond card if there’s a score.
+
+a) Import Badge (if you’re using shadcn/ui)
+
+At the top with other UI imports:
+
+import { Badge } from "@/components/ui/badge";
+
+
+(If you don’t have Badge set up, you can replace it with a <span> and the same Tailwind classes.)
+
+b) Add helpers for styling
+
+Inside the file, near the top (but below imports), add:
+
+function getRiskTierClasses(
+  tier: Bond["riskTier"]
+): string {
+  if (!tier) return "bg-slate-100 text-slate-800";
+
+  switch (tier) {
+    case "low":
+      return "bg-emerald-100 text-emerald-800";
+    case "moderate":
+      return "bg-amber-100 text-amber-800";
+    case "high":
+      return "bg-red-100 text-red-800";
+    default:
+      return "bg-slate-100 text-slate-800";
+  }
+}
+
+function formatBondScore(score: number | null): string {
+  if (score == null) return "Not scored";
+  return `${score}/100`;
+}
+
+c) Render badge inside each bond card
+
+Find where you map over bonds, something like:
+
+{bonds?.map((bond) => (
+  <Card key={bond.id}>
+    <CardHeader>
+      <CardTitle>{bond.name}</CardTitle>
+      {/* ... */}
+    </CardHeader>
+    <CardContent>
+      {/* details */}
+    </CardContent>
+  </Card>
+))}
+
+
+Update the header to include the score + tier badge. For example:
+
+{bonds?.map((bond) => (
+  <Card key={bond.id}>
+    <CardHeader className="flex flex-row items-center justify-between gap-2">
+      <div>
+        <CardTitle className="text-base font-semibold">
+          {bond.name}
+        </CardTitle>
+        <p className="text-xs text-muted-foreground">
+          {bond.cusip || bond.isin || "No ID set"}
+        </p>
+      </div>
+
+      {/* NEW: Bond score + risk tier badge */}
+      {bond.bondScore != null && (
+        <Badge
+          className={
+            "text-xs font-medium px-2 py-1 rounded-full " +
+            getRiskTierClasses(bond.riskTier)
+          }
+        >
+          {formatBondScore(bond.bondScore)}{" "}
+          {bond.riskTier && (
+            <span className="ml-1 capitalize">
+              ({bond.riskTier} risk)
+            </span>
+          )}
+        </Badge>
+      )}
+
+      {/* If you want to show something when not scored at all: */}
+      {bond.bondScore == null && (
+        <Badge className="bg-slate-100 text-slate-700 text-xs">
+          Not scored
+        </Badge>
+      )}
+    </CardHeader>
+
+    <CardContent>
+      {/* existing card content */}
+    </CardContent>
+  </Card>
+))}
+
+
+That will:
+
+Show an emerald badge for low risk, amber for moderate, red for high.
+
+Display 82/100 (low risk) style labels.
+
+Still work when a bond has no score (badge says “Not scored”).
+
+3️⃣ (Optional) Frontend hook to re-score using the new endpoint
+
+If you want a quick UI action to re-score a bond (e.g., later when you add a “Re-run AI scoring” button), you can add something like this inside BondsPage:
+
+async function updateBondScore(bondId: number, score: number) {
+  const res = await fetch(`/api/bonds/${bondId}/score`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+      ...authHeaders(),
+    },
+    body: JSON.stringify({ bondScore: score }),
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || "Failed to update bond score");
+  }
+
+  const updated = (await res.json()) as Bond;
+
+  // update local list
+  setBonds((prev) =>
+    prev?.map((b) => (b.id === bondId ? updated : b)) ?? prev
+  );
+}
+
+
+Then later you can tie that to:
+
+A “Re-score” button that runs AI on the server and calls this.
+
+Or a manual override input in an admin-only UI.
+
+Summary
+
+✅ You now persist bondScore + riskTier on the bonds table.
+
+✅ There’s a dedicated PATCH /api/bonds/:id/score endpoint to update just the score.
+
+✅ The bond list cards visually show score + risk tier with colored badges.

@@ -63,6 +63,9 @@ Preferred communication style: Simple, everyday language.
 
 ### Bond Management System
 - **Functionality**: Create and manage bonds with comprehensive metadata (CUSIP, ISIN, coupon, maturity, etc.).
+- **AI Bond Extraction**: GPT-5 extracts structured bond data from PDF/DOCX documents, including bondScore (0-100), riskTier (low/moderate/high), and 11+ bond fields. Auto-fills form with extracted data.
+- **Validation**: Strict Zod schema validation ensures AI responses contain required fields (bondScore, riskTier enum) and valid numeric data. Returns 422 for validation failures, 503 for configuration errors.
+- **Extraction Endpoint**: POST /api/bonds/extract-from-document accepts file uploads, validates with strict schema, returns structured data with warnings for low-confidence fields.
 - **AI Document Drafting**: GPT-5 generates bond documents.
 - **Document Upload**: Supports PDF and DOCX with text extraction, summarization, and tagging.
 - **File Storage**: Multer-based, organized in `uploads/bond-documents`.
