@@ -75,10 +75,11 @@ async function extractTextFromFile(
   const buffer = await fs.readFile(resolved);
 
   if (mimeType === "application/pdf" || filePath.toLowerCase().endsWith(".pdf")) {
-    const pdfParseModule = await import("pdf-parse");
-    const pdfParse = pdfParseModule.default ?? pdfParseModule;
-    const data = await pdfParse(buffer);
-    return data.text || "";
+    // pdf-parse v2 uses class-based API
+    const { PDFParse } = await import("pdf-parse");
+    const parser = new PDFParse({ data: buffer });
+    const result = await parser.getText();
+    return result.text || "";
   }
 
   if (
