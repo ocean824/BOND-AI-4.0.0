@@ -1,0 +1,2448 @@
+
+
+
+
+You said:
+Within the app I need to create a full aution capability for investors to bid on perfected bonds. The auction will be on a 5 day countdown timer. This feature must be able to keep track of all the bids and the investors who are doing the bidding. The perfected bond will be automatically taken down once the reserve price has been succefully bid. The perfected bonds will be put on the "Bond Exchange" by automatic triggers from other features within the app. ALL OTHER ACCESS TO ALL OTHER FEATURES WILL BE UNACCESSABLE TO THE INVESTORS. THE INVESTORS WILL ONLY SEE:  THE TOTAL DOLLAR AMOUNT OF THE UPCOMING BONDS THAT WILL BE "PERFECTED" AND THEIR APPROXIMATE TIMELINE OF THEIR AVAILABILITY TO BE PUT ON THE EXCHANGE FOR BIDDING. IT IS IMPERATIVE THAT THE INVESTORS GET NO OTHER ACCESS TO ANY OTHER FEATURES OF THE BOND VALUATION APP.
+ChatGPT said:
+
+Thought for 23s
+Got it – we’re adding a locked-down Bond Exchange + 5-day auctions just for investors, fully isolated from the rest of your Bond Valuation App.
+
+I’ll break this into (1) roles & access model, (2) database schema, (3) backend routes & logic (including timers & reserve logic), and (4) investor UI / UX so you can plug it straight into your existing Node/TS/Drizzle/React stack.
+
+1. Roles & Access Model (Investors see only the Exchange)
+Roles
+You’ll want at least:
+
+ADMIN – full access (internal staff)
+
+UNDERWRITER / INTERNAL – access to all bond valuation & perfection features
+
+INVESTOR – only the Bond Exchange + upcoming perfected-bond totals
+
+Core rule
+If user.role === "INVESTOR", they can only hit /investor/* and /auth/* endpoints. Everything else returns 403.
+
+Example middleware (Express/Node + TypeScript)
+// middleware/auth.ts
+import { Request, Response, NextFunction } from "express";
+
+export type AppRole = "ADMIN" | "UNDERWRITER" | "INTERNAL" | "INVESTOR";
+
+export interface AuthUser {
+  id: string;
+  role: AppRole;
+  email: string;
+}
+
+declare global {
+  namespace Express {
+    interface Request {
+      user?: AuthUser;
+    }
+  }
+}
+
+export function requireAuth(
+  allowedRoles?: AppRole[]
+) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    const user = req.user;
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+
+    if (allowedRoles && !allowedRoles.includes(user.role)) {
+      return res.status(403).json({ error: "Forbidden" });
+    }
+    next();
+  };
+}
+
+// "Investor gate": investors CANNOT access non-investor routes
+export function blockInvestorsForNonInvestorRoutes(
+  req: Request,
+  res: Response,
+  next: NextFunction
+) {
+  const user = req.user;
+  if (user?.role === "INVESTOR") {
+    // Only allow /auth/* and /investor/*
+    if (
+      req.path.startsWith("/auth/") ||
+      req.path.startsWith("/investor/")
+    ) {
+      return next();
+    }
+    return res.status(403).json({ error: "Investors cannot access this resource" });
+  }
+  next();
+}
+Attach blockInvestorsForNonInvestorRoutes as a global middleware so investors are hard-walled away from the rest of the app, regardless of the front-end.
+
+On the front-end, you also:
+
+Render a different navbar/layout for INVESTOR role.
+
+Do not route them to internal paths; send them only to:
+
+/investor/overview
+
+/investor/exchange
+
+/investor/my-bids
+
+2. Database Schema for the Bond Exchange
+Assuming Drizzle + Postgres (or similar). We’ll add:
+
+auctions – one auction per perfected bond (5-day timer, reserve, status)
+
+auction_bids – bids and who placed them
+
+Extend bonds with a few columns linking to auctions / perfection state
+
+users already exists; we rely on role = 'INVESTOR'
+
+bonds additions (if not already present)
+// db/schema/bonds.ts
+import { pgTable, uuid, text, timestamp, numeric, boolean } from "drizzle-orm/pg-core";
+
+export const bonds = pgTable("bonds", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  // ... existing fields (cusip, faceValue, etc.)
+
+  isPerfected: boolean("is_perfected").notNull().default(false),
+  perfectedAt: timestamp("perfected_at", { withTimezone: true }),
+  // If you want the bond itself to know its "current auction"
+  currentAuctionId: uuid("current_auction_id").references(() => auctions.id, {
+    onDelete: "set null",
+  }),
+});
+NOTE: auctions is referenced here; in actual Drizzle code you’d place these in separate files and use forward references or reorder imports appropriately.
+
+auctions table
+// db/schema/auctions.ts
+import { pgTable, uuid, timestamp, numeric, text } from "drizzle-orm/pg-core";
+import { bonds } from "./bonds";
+import { users } from "./users";
+
+export type AuctionStatus =
+  | "PENDING"        // created but not yet live
+  | "ACTIVE"         // investors can bid (5-day window)
+  | "RESERVE_MET"    // reserve hit; closing or closed
+  | "COMPLETED"      // fully closed + winning bid recorded
+  | "CANCELLED"
+  | "EXPIRED";       // time ended without reserve met
+
+export const auctions = pgTable("auctions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  bondId: uuid("bond_id")
+    .notNull()
+    .references(() => bonds.id, { onDelete: "cascade" }),
+  status: text("status").notNull().default("PENDING"), // AuctionStatus
+
+  // 5-day countdown
+  startsAt: timestamp("starts_at", { withTimezone: true }).notNull(),
+  endsAt: timestamp("ends_at", { withTimezone: true }).notNull(),
+
+  // Reserve price / min acceptable bid
+  reservePrice: numeric("reserve_price", { precision: 18, scale: 2 }).notNull(),
+
+  // For convenience / final state
+  winningBidId: uuid("winning_bid_id").references(() => auctionBids.id),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+});
+auction_bids table
+// db/schema/auctionBids.ts
+import { pgTable, uuid, numeric, timestamp } from "drizzle-orm/pg-core";
+import { auctions } from "./auctions";
+import { users } from "./users";
+
+export const auctionBids = pgTable("auction_bids", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  auctionId: uuid("auction_id")
+    .notNull()
+    .references(() => auctions.id, { onDelete: "cascade" }),
+  investorId: uuid("investor_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+
+  amount: numeric("amount", { precision: 18, scale: 2 }).notNull(),
+  placedAt: timestamp("placed_at", { withTimezone: true }).defaultNow(),
+});
+users table – must have role
+// db/schema/users.ts
+export const users = pgTable("users", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  email: text("email").notNull().unique(),
+  passwordHash: text("password_hash").notNull(),
+  role: text("role").notNull().default("INTERNAL"), // "ADMIN" | "UNDERWRITER" | "INTERNAL" | "INVESTOR"
+  // ...
+});
+3. Backend Logic: Triggers, Auctions, Bidding, and Reserve
+3.1. Automatic trigger: perfected bond → auction
+Some other part of your app will mark bonds as perfected. When that happens – and the bond is approved for sale – we can auto-create an auction.
+
+Event hook / service:
+
+// services/bondPerfection.ts
+import { db } from "../db";
+import { bonds } from "../db/schema/bonds";
+import { auctions } from "../db/schema/auctions";
+import { eq } from "drizzle-orm";
+import dayjs from "dayjs";
+
+export async function handleBondPerfected(bondId: string, reservePrice: number) {
+  const [bond] = await db.select().from(bonds).where(eq(bonds.id, bondId));
+  if (!bond) throw new Error("Bond not found");
+
+  const startsAt = new Date(); // or schedule/future start if needed
+  const endsAt = dayjs(startsAt).add(5, "day").toDate();
+
+  const [auction] = await db
+    .insert(auctions)
+    .values({
+      bondId,
+      reservePrice,
+      status: "ACTIVE",
+      startsAt,
+      endsAt,
+    })
+    .returning();
+
+  await db
+    .update(bonds)
+    .set({
+      isPerfected: true,
+      perfectedAt: new Date(),
+      currentAuctionId: auction.id,
+    })
+    .where(eq(bonds.id, bondId));
+
+  return auction;
+}
+Connect this to the existing workflow: e.g. when an underwriter finishes a bond and hits “Mark Perfected & Offer on Exchange,” call handleBondPerfected.
+
+3.2. Investor API: overview & exchange endpoints
+3.2.1. Overview – ONLY totals + timelines
+Requirement: Investors see only:
+
+Total dollar amount of upcoming bonds that will be perfected
+
+Approximate timeline when they’ll be available for bidding (no CUSIP, no bond IDs, no debtor names, etc.)
+
+Example endpoint:
+
+// routes/investorOverview.ts
+import { Router } from "express";
+import { requireAuth } from "../middleware/auth";
+import { bonds } from "../db/schema/bonds";
+import { db } from "../db";
+import { gt, and, eq, isNull } from "drizzle-orm";
+import dayjs from "dayjs";
+
+export const investorOverviewRouter = Router();
+
+// Investors only
+investorOverviewRouter.get(
+  "/investor/overview",
+  requireAuth(["INVESTOR"]),
+  async (req, res) => {
+    // Example logic: group upcoming perfected bonds by approximate window
+    const now = dayjs();
+    const next7d = now.add(7, "day").toDate();
+    const next30d = now.add(30, "day").toDate();
+
+    // Assuming bonds that *will* be perfected have some field/flag or expectedPerfectedAt
+    const upcoming = await db
+      .select({
+        expectedPerfectedAt: bonds.perfectedAt, // or expectedPerfectedAt if you have it
+        faceValue: bonds.faceValue,            // assuming you store faceValue
+      })
+      .from(bonds)
+      .where(
+        and(
+          eq(bonds.isPerfected, false),
+          // maybe some other internal statuses, adapt as needed
+          isNull(bonds.currentAuctionId)
+        )
+      );
+
+    // Aggregate totals into simple buckets
+    const result = {
+      totals: {
+        next7Days: 0,
+        next30Days: 0,
+        later: 0,
+      },
+    };
+
+    for (const b of upcoming) {
+      const when = dayjs(b.expectedPerfectedAt || now.add(31, "day"));
+      const fv = Number(b.faceValue ?? 0);
+      if (when.isBefore(next7d)) result.totals.next7Days += fv;
+      else if (when.isBefore(next30d)) result.totals.next30Days += fv;
+      else result.totals.later += fv;
+    }
+
+    // No bond-level detail, just aggregation
+    return res.json(result);
+  }
+);
+Front-end: simple cards like:
+
+“Approx. perfected within 7 days: $X”
+
+“Approx. perfected within 30 days: $Y”
+
+“Beyond 30 days: $Z”
+
+No link to individual bonds.
+
+3.2.2. List active auctions
+// routes/investorAuctions.ts
+import { Router } from "express";
+import { requireAuth } from "../middleware/auth";
+import { auctions } from "../db/schema/auctions";
+import { db } from "../db";
+import { and, eq, gt, lt } from "drizzle-orm";
+import dayjs from "dayjs";
+
+export const investorAuctionsRouter = Router();
+
+investorAuctionsRouter.get(
+  "/investor/auctions",
+  requireAuth(["INVESTOR"]),
+  async (req, res) => {
+    const now = new Date();
+
+    const activeAuctions = await db
+      .select({
+        id: auctions.id,
+        status: auctions.status,
+        startsAt: auctions.startsAt,
+        endsAt: auctions.endsAt,
+        reservePrice: auctions.reservePrice,
+      })
+      .from(auctions)
+      .where(
+        and(
+          eq(auctions.status, "ACTIVE"),
+          lt(auctions.startsAt, now),
+          gt(auctions.endsAt, now)
+        )
+      );
+
+    return res.json({ auctions: activeAuctions });
+  }
+);
+Note: You only expose auction-level data, not full bond details if you want to keep it very tight. If you do show some bond info, keep it generic (e.g., “Face value range”, rating, etc.) depending on your compliance needs.
+
+3.2.3. Auction detail + current highest bid
+import { auctionBids } from "../db/schema/auctionBids";
+
+investorAuctionsRouter.get(
+  "/investor/auctions/:id",
+  requireAuth(["INVESTOR"]),
+  async (req, res) => {
+    const { id } = req.params;
+
+    const [auction] = await db
+      .select()
+      .from(auctions)
+      .where(eq(auctions.id, id));
+
+    if (!auction) return res.status(404).json({ error: "Auction not found" });
+
+    // Get highest bid
+    const [highestBid] = await db
+      .select()
+      .from(auctionBids)
+      .where(eq(auctionBids.auctionId, id))
+      .orderBy(auctionBids.amount.desc())
+      .limit(1);
+
+    return res.json({
+      auction: {
+        id: auction.id,
+        status: auction.status,
+        startsAt: auction.startsAt,
+        endsAt: auction.endsAt,
+        reservePrice: auction.reservePrice,
+        highestBid: highestBid ? highestBid.amount : null,
+      },
+    });
+  }
+);
+3.3. Place bid endpoint (with reserve logic)
+Business rules:
+
+Only INVESTOR role.
+
+Only while auction.status === "ACTIVE" and now between startsAt and endsAt.
+
+Bid must be > current highest bid (or a minimum increment you define).
+
+If bid amount ≥ reservePrice:
+
+Mark auction RESERVE_MET → then immediately COMPLETED (per your requirement: “taken down once reserve price has been successfully bid”).
+
+Set winningBidId.
+
+Remove from active listing.
+
+// routes/investorBids.ts
+import { Router } from "express";
+import { requireAuth } from "../middleware/auth";
+import { auctions } from "../db/schema/auctions";
+import { auctionBids } from "../db/schema/auctionBids";
+import { db } from "../db";
+import { eq } from "drizzle-orm";
+
+export const investorBidsRouter = Router();
+
+investorBidsRouter.post(
+  "/investor/auctions/:id/bids",
+  requireAuth(["INVESTOR"]),
+  async (req, res) => {
+    const investor = req.user!;
+    const { id } = req.params;
+    const { amount } = req.body as { amount: number };
+
+    if (!amount || amount <= 0) {
+      return res.status(400).json({ error: "Bid amount must be positive" });
+    }
+
+    const [auction] = await db
+      .select()
+      .from(auctions)
+      .where(eq(auctions.id, id));
+
+    if (!auction) return res.status(404).json({ error: "Auction not found" });
+
+    const now = new Date();
+    if (auction.status !== "ACTIVE" || now < auction.startsAt || now > auction.endsAt) {
+      return res.status(400).json({ error: "Auction is not open for bidding" });
+    }
+
+    // Get current highest bid
+    const [highestBid] = await db
+      .select()
+      .from(auctionBids)
+      .where(eq(auctionBids.auctionId, auction.id))
+      .orderBy(auctionBids.amount.desc())
+      .limit(1);
+
+    const minBid = highestBid ? Number(highestBid.amount) + 1 : 1; // add your real increment rule
+
+    if (amount < minBid) {
+      return res.status(400).json({
+        error: `Bid must be at least ${minBid}`,
+        currentHighest: highestBid ? highestBid.amount : null,
+      });
+    }
+
+    // Insert bid
+    const [bid] = await db
+      .insert(auctionBids)
+      .values({
+        auctionId: auction.id,
+        investorId: investor.id,
+        amount,
+      })
+      .returning();
+
+    // Check reserve
+    const reserveMet = amount >= Number(auction.reservePrice);
+
+    if (reserveMet) {
+      // Immediately close auction and set winning bid
+      await db
+        .update(auctions)
+        .set({
+          status: "COMPLETED",
+          winningBidId: bid.id,
+        })
+        .where(eq(auctions.id, auction.id));
+
+      // Optionally: also update the bond status to "SOLD"
+      // await updateBondStatusAfterSale(auction.bondId, bid.id);
+
+      return res.json({
+        bid,
+        message: "Reserve met. Auction completed. You are the winning bidder.",
+      });
+    }
+
+    return res.json({ bid, message: "Bid placed successfully" });
+  }
+);
+For race conditions, you’d ideally wrap this in a DB transaction and/or lock the auction row (SELECT ... FOR UPDATE) so two investors can’t both simultaneously “win” at the exact same millisecond. But this gives you the core logic.
+
+3.4. Auction countdown & auto-expiry (5-day timer)
+The 5-day window is baked into startsAt and endsAt. To enforce it:
+
+At bid time: check now <= endsAt.
+
+Run a background job every few minutes to close expired auctions where no reserve was met.
+
+// jobs/closeExpiredAuctions.ts
+import { db } from "../db";
+import { auctions } from "../db/schema/auctions";
+import { and, eq, lt } from "drizzle-orm";
+
+export async function closeExpiredAuctionsJob() {
+  const now = new Date();
+
+  const expired = await db
+    .select()
+    .from(auctions)
+    .where(
+      and(
+        eq(auctions.status, "ACTIVE"),
+        lt(auctions.endsAt, now)
+      )
+    );
+
+  for (const a of expired) {
+    // No reserve met if we’re still ACTIVE after end
+    await db
+      .update(auctions)
+      .set({ status: "EXPIRED" })
+      .where(eq(auctions.id, a.id));
+
+    // Optionally: mark bond as "NOT SOLD" or return it to inventory
+  }
+}
+Schedule via node-cron, a simple setInterval, or your hosting’s cron tools.
+
+4. Investor Front-End UX (what they see vs. what they don’t)
+Investor Portal layout
+Create a separate route tree, e.g.:
+
+/investor/login
+
+/investor/overview
+
+/investor/exchange
+
+/investor/my-bids
+
+Once logged in as INVESTOR:
+
+Overview page
+
+Cards showing:
+
+“Total bonds expected to be perfected within 7 days: $X”
+
+“Within 30 days: $Y”
+
+“Later: $Z”
+
+All data from /investor/overview.
+
+No link into any specific bond or internal details.
+
+Bond Exchange page
+
+Table/list of active auctions from /investor/auctions.
+
+Columns like:
+
+Auction ID (or a generic label)
+
+Time remaining (derived from endsAt - now)
+
+Reserve price
+
+Current highest bid
+
+“Bid” button opening a modal:
+
+Form for bid amount → calls POST /investor/auctions/:id/bids.
+
+Auction detail
+
+Display countdown timer (client-side computed from endsAt).
+
+Current highest bid.
+
+Reserve price.
+
+Bid history for that auction (optional).
+
+Bid form.
+
+My Bids page
+
+List investor’s own bids (query /investor/my-bids endpoint you can easily add).
+
+Status: “Highest / Outbid / Won / Auction expired”.
+
+What investors MUST NOT SEE
+No navigation links to:
+
+Bond creation
+
+Compliance tools
+
+Underwriting workflow
+
+Any “perfection” logic, FCRA/valuation logic, etc.
+
+Backend ensures this via:
+
+blockInvestorsForNonInvestorRoutes middleware.
+
+Investor routes under /investor/* only.
+
+Frontend ensures this via:
+
+Role-based layout switch: when role === "INVESTOR", render only the investor nav.
+
+5. How this fits your requirement line-by-line
+“Full auction capability for investors to bid on perfected bonds.”
+→ auctions + auction_bids schema, investor routes, bidding logic.
+
+“Auction will be on a 5 day countdown timer.”
+→ startsAt + endsAt = startsAt + 5 days, enforced in bid endpoint + auto-expiry job.
+
+“Keep track of all the bids and the investors who are doing the bidding.”
+→ auction_bids table referencing auctionId + investorId.
+
+“Perfected bond will be automatically taken down once the reserve price has been successfully bid.”
+→ In POST /investor/auctions/:id/bids, if amount >= reservePrice → set status to COMPLETED and exclude from active auctions.
+
+“Perfected bonds will be put on the Bond Exchange by automatic triggers from other features within the app.”
+→ handleBondPerfected(bondId, reservePrice) service, called when your existing workflow marks a bond perfected.
+
+“ALL OTHER ACCESS… WILL BE UNACCESSABLE TO THE INVESTORS.”
+→ blockInvestorsForNonInvestorRoutes middleware + investor-only route tree + separate UI.
+
+“Investors will only see: the total dollar amount of the upcoming bonds that will be perfected and their approximate timeline…”
+→ /investor/overview returns only aggregated totals, no specific bond records.
+
+If you’d like next, I can:
+
+Turn this into a drop-in folder structure (routes, services, schema, React pages), or
+
+Adapt the code snippets exactly to your current app layout (e.g. Next.js API routes instead of Express, or different ORM).
+
+You said:
+NEXT: Turn this into a drop-in folder structure (routes, services, schema, React pages), or
+
+Adapt the code snippets exactly to your current app layout (e.g. Next.js API routes instead of Express. Ship to me as a replit.com ready zip file that I can upload.
+ChatGPT said:
+
+Thought for 2m 51s
+Here’s your Replit-ready zip with the Bond Exchange / investor auction module:
+
+👉 Download the Bond Exchange module (zip)
+
+What’s inside
+Backend (Node + TypeScript + Express + Drizzle)
+Root:
+
+package.json – dev script (npm run dev), dependencies, TS tooling
+
+tsconfig.json
+
+.replit – runs npm install && npm run dev
+
+src/:
+
+index.ts – Express app wiring:
+
+Demo auth stub (treats every request as an INVESTOR for testing)
+
+Global guard: blockInvestorsForNonInvestorRoutes
+
+Mounts investor routes:
+
+/investor/overview
+
+/investor/auctions
+
+/investor/auctions/:id
+
+/investor/auctions/:id/bids
+
+/investor/my-bids
+
+middleware/auth.ts
+
+AppRole type with "INVESTOR" etc.
+
+requireAuth(allowedRoles)
+
+blockInvestorsForNonInvestorRoutes (hard-walls investors from everything except /investor/* and /auth/*)
+
+db/index.ts
+
+Drizzle + pg pool wired to process.env.DATABASE_URL
+
+Re-exports schema
+
+db/schema/users.ts
+
+users table with role column
+
+db/schema/bonds.ts
+
+bonds table with:
+
+faceValue
+
+isPerfected
+
+perfectedAt
+
+expectedPerfectedAt
+
+currentAuctionId
+
+db/schema/auctions.ts
+
+auctions table with:
+
+bondId
+
+status (PENDING | ACTIVE | RESERVE_MET | COMPLETED | CANCELLED | EXPIRED)
+
+startsAt, endsAt (5-day window)
+
+reservePrice
+
+winningBidId
+
+db/schema/auctionBids.ts
+
+auction_bids table with:
+
+auctionId
+
+investorId
+
+amount
+
+placedAt
+
+routes/investorOverview.ts
+
+GET /investor/overview (INVESTOR only)
+
+Returns only aggregate totals:
+
+next7Days, next30Days, later
+
+routes/investorAuctions.ts
+
+GET /investor/auctions – list ACTIVE auctions in their 5-day window
+
+GET /investor/auctions/:id – single auction + highest bid
+
+routes/investorBids.ts
+
+POST /investor/auctions/:id/bids
+
+Enforces:
+
+user is INVESTOR
+
+auction is ACTIVE & within time window
+
+bid > current highest
+
+if bid ≥ reserve → set status = COMPLETED, set winningBidId, auction taken down
+
+GET /investor/my-bids – logged-in investor’s bid history
+
+services/bondPerfection.ts
+
+handleBondPerfected(bondId, reservePrice)
+
+Creates 5-day ACTIVE auction
+
+Marks bond isPerfected = true, sets perfectedAt, currentAuctionId
+
+jobs/closeExpiredAuctions.ts
+
+closeExpiredAuctionsJob() – marks overdue ACTIVE auctions as EXPIRED
+
+Frontend (drop-in React pages)
+Under frontend/investors/:
+
+InvestorOverview.tsx
+
+Calls GET /investor/overview
+
+Renders only:
+
+“Within 7 days: $X”
+
+“Within 30 days: $Y”
+
+“Later: $Z”
+
+InvestorExchange.tsx
+
+Calls GET /investor/auctions
+
+Shows active auctions in a table with:
+
+Auction ID
+
+Status
+
+Ends at
+
+Time left (simple countdown)
+
+Reserve
+
+Simple bid form:
+
+POST /investor/auctions/:id/bids
+
+InvestorMyBids.tsx
+
+Calls GET /investor/my-bids
+
+Shows current investor’s bids
+
+frontend/README_integration.md explains how to mount these in your existing React app (router, layout, etc.).
+
+How to use in Replit
+Upload the zip above into Replit and import as a new Node project.
+
+In the Replit shell:
+
+npm install
+npm run dev
+Set DATABASE_URL in the Replit Secrets (or .env) to point at your Postgres instance.
+
+Replace the demo auth middleware in src/index.ts with your real auth so req.user is the actual logged-in user (with role: "INVESTOR" for investors).
+
+Wire the React components into your existing frontend (or build a small investor portal around them).
+
+This module gives you:
+
+Full 5-day auction lifecycle
+
+Reserve-price auto-completion
+
+Investor-only access to the Bond Exchange
+
+Zero visibility into any other Bond Valuation App features for INVESTOR users. 
+
+You said:
+surety resposibilities (2).docx
+Document
+14What_YouShldKnow_Gen_Agrmt_ofIndem_2017.pdf
+PDF
+Now I have a different task, it has to do with a "Surety" feature or button that must be on the dashboard. I want the app to do the surety underwriting for the Surety. This feature must be hard gated to only Admin and password protected. The feature will perform all the legally required functions and create documents providing the "Surety" for the bonds. General indemnity agreements accompany most surety bond contracts. This guide explains exactly how surety indemnity agreements work and what you are liable for when you sign one.
+
+What Is an Indemnity Agreement?
+A simple definition of indemnity is coverage for potential losses or damages. It means one party is financially liable if they cause loss to another. In the surety bond context, an indemnity agreement holds the bondholder liable for compensating the surety.
+
+Indemnitors agree to hold harmless and indemnify the surety from financial loss caused by failure to perform of the principal. This transfers risk from the surety to the principal and is typically a requirement before the surety will issue a bond.
+
+How Do Surety Indemnity Agreements Work?
+In surety indemnity agreements, underwriters determine if the principal has the financial capacity to meet the contract terms. An indemnity bond works similarly to a line of credit by guaranteeing money is available. Like a bank, the surety expects repayment from the principal if it covers a claim. 
+
+Business owners often establish an LLC to reduce personal liability for business finances. However, sureties require the personal indemnity of business owners to guarantee their obligation to repay the surety — even if the business goes bankrupt or is insolvent. Types of General Indemnity Agreement Provisions 
+A principal may have different obligations in a general indemnity agreement (GIA) depending on the form’s specific terms. Here are the most common provisions found in surety bond indemnity agreements: 
+
+Indemnification: A general indemnity provision transfers risk from the surety to the principal and covers a broad range of potential liabilities
+Right to settle: The surety may act on the principal’s behalf and has full discretion on how to respond to a claim: pay, settle or defend
+Right to enforce: The principal must fully cover any claims-related expenses of the surety, including legal fees
+Books and records: The surety may inspect the principal’s books and financial records to ensure financial capacity 
+Duty to cooperate: The principal must participate in any claims investigations
+Collateral deposit: The surety has the right to request collateral security from indemnitors. (Only required for 0.1% of SuretyBonds.com customers.)
+Who Signs the Indemnity Agreement?
+Every stakeholder with 10% or more ownership of a business must sign the general indemnity agreement form individually and on behalf of the company. 
+
+This way, if the principal is unable to repay a claim, the surety can collect payment from the individual owners. This personal indemnity makes it critical to avoid bond claims by acting ethically and following all laws and regulations. 
+
+Why Does My Spouse Need to Sign? 
+The spouses of any married business owners will also need to sign the surety indemnity agreement. Spousal indemnity protects the surety if business owners try to transfer assets into their spouses’ names to avoid repaying the surety for a claim. In some cases, a notary public must sign and notarize the GIA as well. 
+
+Do All Bonds Require an Indemnity Agreement? 
+Not necessarily. For some low-risk bonds, the surety may instantly issue the bond without a credit check or indemnity agreement. However, every application that requires underwriting will also need a signed indemnity form before the surety will issue the bond. 
+
+Indemnity bonds have a higher risk of claim activity than other surety bonds due to the industry, certain terms and conditions, coverage amount — or a combination of factors. 
+
+What Are Indemnity Bonds?
+Indemnity bonds are a type of surety bond that creates a three-party contract between a business or individual, a surety provider, and an entity requiring the bond (obligee).
+
+They function like any surety bond, but also require an indemnity agreement between the surety and the bondholder. Surety Bond Collateral Requirements
+In order to qualify for surety bond coverage, individuals or firms may need to put up collateral. Many people may be surprised to find that collateral can become a vital part of the surety bond process. Bonding companies often require collateral they can secure against the provided services. But what is considered acceptable as collateral under a bond? How much collateral is required? And is collateral required in addition to a fee? We’re here to help answer these questions and others you may have regarding collateral on surety bonds.
+
+Here, The ProSure Group discusses the requirements of surety bond collateral, the purpose of collateral, and what may qualify as acceptable or unacceptable forms of collateral, among other details. Contact our surety company today to request a complimentary quote and for additional information.
+
+Why Is Collateral Needed On Surety Bonds?
+Collateral isn’t used too often, but it may be required in certain circumstances. A common misconception is that collateral is only needed for individuals or firms in financial distress. One of the reasons collateral may be required may be that bond types are at high risk to receive claims against their bond. For instance, defendants’ court bonds or appellate bonds, tax lien bonds, or release of lien bonds are a few types of bonds with a high claims frequency, so it makes good business sense for the surety to collect the money in advance. Collateral is used to support the applicant’s indemnity or agreement to repay the surety if the surety has to pay a claim. As a surety bond isn’t insurance, the applicant/principal must pay the surety back.
+
+Poor credit is another, more obvious reason why someone would need to post collateral, but another less obvious reason is for someone with good credit to post collateral. Some applicants may have good credit and a lot of experience but do not have the financial strength in relation to the size of the bond, requiring them to supply collateral. In many cases, collateral may be needed because it’s a beneficial business decision made by the surety, so they know they will get paid back if there are any claims.
+
+How Much Will I Have To Pay In Collateral?
+The amount of the collateral depends on the surety, and the amount fluctuates with each instance. Therefore, the bond amount is a significant factor in determining the amount of collateral required.
+
+Why Do I Have To Pay A Fee AND Pay Collateral?
+Upon purchasing a surety bond, the fee required is only a small percentage of the bond, and the amount doesn’t go towards the collateral. Instead, the premium paid to purchase the bond is the sale of the bond itself towards services, etc.
+
+How Long Is Collateral Held?
+A surety bond company often holds collateral past the cancellation or release date of the bond because the obligee can still claim the bond up to a year or more after the bond is canceled. The collateral can be held up to 180 days but typically is returned within 90 days of the cancellation or release date of the bond.
+
+Why Should I Get A Surety Bond Instead Of Just Posting An Irrevocable Letter Of Credit?
+When there is an option to use an ILOC instead of getting a surety bond, why wouldn’t someone do that instead? The reason is quite simple. If only an ILOC is provided to the obligee without the placement of a surety bond, anyone can make a claim against you, and you will be required to pay it. With a surety bond, the surety performs research to determine whether or not the claim is valid.
+
+What Is An Acceptable Form Of Collateral?
+Generally, the only forms of collateral accepted are cash and an irrevocable letter of credit. An irrevocable letter of credit (ILOC) is a written guarantee by a financial institution that the necessary funds are available and cannot be touched for as long as the bond is active. For the entire period that the surety bond is active, the ILOC cannot be canceled or modified in any way unless there is an explicit agreement made by all parties involved. In brief, an ILOC serves as a promise that the bank will pay the surety if needed.
+
+What Is Not An Acceptable Form Of Collateral?
+Collateral cannot be a certificate of deposit (CD), government securities, or physical assets. Certificates of deposit are typically not accepted because their maturity dates rarely coincide with the bond term. The mismatched dates cause the collateral to liquidate prematurely, which will cause penalties or the collateral being held longer than it is needed.A CD is provided by a financial institution and is backed by the Federal Deposit Insurance Corporation. The CD allows the bank to retain the money for a certain amount of time, during which time the bank gains interest on the return, while they guarantee repayment once the term is complete. Government securities include blue-chip stocks and bonds and gold and silver bullion. These were accepted in the past for collateral, but since the market fluctuates, they are considered unreliable security for sureties. Physical assets are also not considered to be reliable collateral. Physical assets include items such as cars, boats, etc. However, some sureties will accept real estate and other fixed assets as collateral.Understanding how surety bond underwriters look at trusts can have a significant impact on Bond Principals and the surety bond capacity they can obtain. Here is more information about how underwriters view surety bonds and trusts.
+
+Contents  hide 
+1 What are Trusts?
+2 Trusts in Surety Bond Underwriting
+3 Indemnity and Trusts
+4 Consider Limited Indemnity of the Trust
+5 No Indemnity of the Trust
+6 Consider Your Lending Relationship
+7 Leave Adequate Resources in the Company
+What are Trusts?
+A trust is a legal, fiduciary arrangement where assets are held by a third party for the benefit of other parties known as the beneficiary or beneficiaries. Trusts can be an important consideration in proper succession planning and estate planning. Trusts can hold many different types of assets including cash, marketable securities, life insurance, real property, etc.
+
+There are also many different types of trusts. These can include marital trusts, generation skipping trusts, charitable trusts, life insurance trusts, etc. Two broad categories of trusts include Revocable Trusts and Irrevocable Trusts.
+
+A Revocable Trust is one that can be changed during your lifetime. It allows adjustments to be made during one’s lifetime. A Revocable Trust can have some protection against creditors.
+
+An Irrevocable Trust is the opposite. Once established, the rules are set. The benefit of this type of trust is that it often provides strong protection against creditors.
+
+Trusts in Surety Bond Underwriting
+Trusts can be a benefit in underwriting surety bonds. Trusts can provide a way to avoid probate and even potentially hold the life insurance or assets for the continuity of the company or the transition of that company. Trust can also potentially hinder surety bond underwriters, however. Here are some key underwriting considerations on how trusts can affect surety bonding.
+
+Indemnity and Trusts
+One of the key elements for extending surety bond credit is the Principle of Indemnity. That means that the surety bond company expects to be reimbursed by the Principal and indemnitors if they pay a valid loss. However, if a majority of a Principal’s assets are held in a trust, it may be difficult or impossible for the surety bond company to get reimbursed from that indemnitor. Therefore, one of the key considerations for providing surety bonds for an indemnitor with a trust is whether that trust can indemnify. This depends on how the trust was set up. If you have a trust, you should expect the surety bond underwriter to request a copy of the trust documents to see whether indemnity is available.
+
+Personal indemnity is often required by surety bond companies when a person and/or their spouse owns 15% or more of a company. There are exceptions. Companies that have very strong balance sheets and track records, may seek a waiver of personal indemnity but in most cases, it will be required. When personal indemnity exists, expect the surety bond company to require the indemnity of that stockholder’s trust along with any trust owned by a spouse. This often brings up objections as it often contradicts the reason the trust was set up. Keep in mind that surety bonds are a credit product though. If a surety bond company cannot get the indemnity of the trust, they also cannot count those assets and the Principal may not qualify for surety bonding. Worse still, an important part of surety bond underwriting is Character. It is part of the 3 C’s which you can read about here. Part of character underwriting is the belief that a Principal will reimburse the surety bond company if a loss occurs. The unwillingness to include one’s trust is often a signal to the surety bond company that the Principal will not try to reimburse after a claim and may try to instead shelter their assets. This might cause some surety bond companies to decline an account, even if other aspects look strong.
+
+ 
+
+Trusts and Surety Bonds. This is a picture of a person signing a document with a red text box saying indemnity is key to writing trusts on it.
+
+Consider Limited Indemnity of the Trust
+If your trust is strong enough, consider limiting the indemnity to a certain dollar figure to support your surety bond capacity. For example, say your trust holds $3 million in assets but your surety bond program only needs $1 million. Your surety bond underwriter may consider limiting the trust’s maximum exposure to $1 million of indemnity.
+
+No Indemnity of the Trust
+What if your trust is contractually not allowed to sign the indemnity agreement? Many times, the way a trust is structured, they are not allowed to sign these documents. In these cases, the surety bond company will have to rely only on the assets outside of the trust when deciding whether to extend surety bond credit.
+
+Consider Your Lending Relationship
+Surety Bond companies always want to be on the same level of indemnity as a Principal’s bank or lender. This means that if your trust is included on your other loans, the surety bond company will want it included in their indemnity as well. At times, a Principal will ask that the trust be excluded from the surety bond company’s indemnity, but this is difficult if the trust is being used as collateral for other credit purposes.
+
+Leave Adequate Resources in the Company
+The best strategy for many surety bond users is to hold adequate financial assets within the company to qualify for surety bond credit outside of your personal trust. By maintaining sufficient working capital and net worth in the company, personal assets, including trusts may be excluded.
+
+Trusts can be a valuable tool for surety bond principals when set up correctly. When putting together your trust, it is important to consider the implications a trust may have on your surety bond capacity and your ability to get surety bonds. SEE attached documents as well to help create this feature within the app. The surety is for JUDGEMENT BONDS ONLY.
+
+ChatGPT said:
+The Surety feature is basically your “internal surety company in a box” – but locked behind an Admin-only vault.
+
+I’ll design it so that:
+
+Only Admin can see/use it (plus an extra password/PIN gate).
+
+It only underwrites Judgment Bonds.
+
+It walks the Admin through surety underwriting, collateral logic, and GIA/indemnity doc generation.
+
+It respects the trust’s duties as surety and the standard GIA provisions from the docs you attached.
+
+Below is a full feature blueprint you can plug into your existing Node/Drizzle/React app. When you’re ready, I can turn this into concrete TypeScript code + a zip like we did for the Bond Exchange.
+
+1. Security & Access Control (Hard-Gated Surety Button)
+Role & route gating
+Rule:
+Only users with role === "ADMIN" can access any Surety route or UI.
+
+Backend pattern:
+
+All Surety routes live under /admin/surety/*.
+
+Middleware: requireAuth(["ADMIN"]) on all of them.
+
+Investors / Underwriters / Internal users get a 403 if they try to hit these APIs.
+
+Extra password / PIN gate (“Surety Vault”)
+On top of normal login:
+
+Admin clicks “Surety” button on dashboard.
+
+UI opens a modal:
+“Enter Surety Admin Password / PIN”
+
+Frontend posts to /admin/surety/unlock with the PIN.
+
+Backend verifies against a stored hash (e.g. surety_admin_pin_hash in a config table or env).
+
+If correct ⇒ set a short-lived server-side flag on the session (req.session.suretyUnlocked = true for e.g. 15 minutes).
+
+All Surety routes check both:
+
+role === "ADMIN"
+
+session.suretyUnlocked === true
+
+That way, even if an Admin walks away from the desk, nobody can just click into Surety.
+
+2. Scope of the Surety Feature (Judgment Bonds Only)
+We constrain this feature to:
+
+Bond type: JUDGMENT only (explicit check).
+
+Surety: your trust acting as surety for those judgment bonds.
+
+Output:
+
+Underwriting decision / capacity check.
+
+Collateral requirement & acceptable collateral types.
+
+Draft General Indemnity Agreement (GIA) + Collateral Agreement + Trust Resolution.
+
+An internal underwriting file (audit trail).
+
+This lines up with the trust’s duties as surety (due diligence, asset protection, compliance) and the structure of professional GIAs.
+
+3. Data Model for the Surety Module
+You can implement this with Drizzle tables like:
+
+3.1. surety_trusts
+Represents any trust (or entity) that can act as surety. For you it’ll mainly be one trust, but we design it generically.
+
+Fields (suggested):
+
+id (uuid, pk)
+
+name (text) – e.g. “JCS 175 Trust”
+
+trustType (enum: REVOCABLE | IRREVOCABLE | OTHER)
+
+canActAsSurety (boolean)
+
+allowedBondTypes (jsonb) – e.g. ["JUDGMENT"]
+
+maxSingleBondLimit (numeric) – max penal sum per bond
+
+aggregateBondLimit (numeric) – max outstanding exposure
+
+currentExposure (numeric) – computed / updated
+
+requiresInsuranceAbove (numeric) – threshold above which E&O or excess insurance is recommended/required
+
+notes (text) – for legal/board notes
+
+This reflects the trust’s duty to protect trust assets and not expose itself to excessive risk. 
+
+3.2. surety_underwriting_cases
+One record per judgment bond you’re considering for surety.
+
+id (uuid, pk)
+
+bondId (uuid, fk → bonds.id)
+
+suretyTrustId (uuid, fk → surety_trusts.id)
+
+status (enum: DRAFT | IN_REVIEW | APPROVED | DECLINED | APPROVED_WITH_COLLATERAL | DOCS_PENDING_SIGNATURE | ACTIVE | RELEASED)
+
+bondType (enum; should be JUDGMENT)
+
+bondPenalSum (numeric)
+
+principalId (uuid, fk to your principal/borrower table)
+
+principalRiskScore (numeric or enum)
+
+collateralRequiredAmount (numeric)
+
+collateralTypeAllowed (jsonb) – list like ["CASH","ILOC"]
+
+indemnityRequired (boolean) – always true for judgment bonds
+
+insuranceRequired (boolean) – when bond exceeds threshold or risk level
+
+underwriterUserId (uuid, fk → users.id (admin))
+
+decisionAt (timestamp)
+
+notes (text) – underwriting notes
+
+3.3. surety_indemnitors
+Everyone who must sign the GIA:
+
+id (uuid)
+
+caseId (uuid, fk → surety_underwriting_cases.id)
+
+type (enum: PRINCIPAL_ENTITY | OWNER | SPOUSE | AFFILIATE | TRUST)
+
+partyId (uuid, fk → whichever table: principals, persons, trusts, etc.)
+
+ownershipPercent (numeric, nullable)
+
+isSpouse (boolean)
+
+signedAt (timestamp, nullable)
+
+signatureStatus (enum: PENDING | SIGNED | DECLINED)
+
+This matches the requirement that all owners ≥10% and their spouses sign the GIA, plus the trust where applicable. 
+
+3.4. surety_collateral
+Collateral requirements and postings:
+
+id (uuid)
+
+caseId (uuid, fk → surety_underwriting_cases.id)
+
+requiredAmount (numeric)
+
+postedAmount (numeric)
+
+collateralType (enum: CASH | ILOC)
+
+ilocBankName (text, nullable)
+
+ilocReference (text, nullable)
+
+heldFrom (date)
+
+releaseEligibleDate (date)
+
+releasedAt (timestamp, nullable)
+
+status (enum: PENDING | POSTED | HELD | RELEASED)
+
+We explicitly do not accept CD, government securities, or physical assets as collateral, aligning with your guidance. 
+
+3.5. surety_documents
+Generated doc instances:
+
+id (uuid)
+
+caseId (uuid)
+
+docType (enum: GIA | COLLATERAL_AGREEMENT | TRUST_RESOLUTION | SURETY_COMMITMENT | UNDERWRITING_REPORT)
+
+storagePath (text) – PDF/Docx location, or text field if storing HTML/markdown.
+
+eSignEnvelopeId (text, nullable)
+
+status (enum: DRAFT | SENT_FOR_SIGNATURE | FULLY_EXECUTED | VOID)
+
+createdAt, updatedAt
+
+4. Underwriting Logic: How the App “Does the Surety Underwriting”
+Your Surety engine should implement the same major duties a professional surety underwriter follows:
+
+Due diligence on the principal & bond
+
+Protecting trust assets / capacity control
+
+Ensuring indemnity + collateral are in place
+
+We’ll focus this on Judgment Bonds.
+
+4.1. Checks on the trust before issuing surety
+For each case:
+
+Confirm trust authority
+
+surety_trust.canActAsSurety === true
+
+allowedBondTypes includes JUDGMENT.
+
+Trust agreement on file includes authority to guarantee / pledge assets (you can track “trust docs verified” as a boolean).
+
+Capacity limits
+
+bondPenalSum <= maxSingleBondLimit.
+
+(currentExposure + bondPenalSum) <= aggregateBondLimit.
+
+Risk vs. insurance rule-of-thumb
+From your doc: larger or higher-risk bonds warrant insurance or additional protections. 
+Example rules:
+
+If bondPenalSum <= 50,000 and fully collateralized ⇒ no extra insurance.
+
+If 50,000 < bondPenalSum <= 250,000 ⇒ either insurance OR full collateral.
+
+If > 250,000 ⇒ strong recommendation or requirement for insurance unless 100% collateralized.
+
+4.2. Checks on the principal & owners (Judgment Bond-specific)
+Evaluate principal’s financial capacity:
+
+Net worth vs bond penal sum.
+
+Cash flow / liquidity.
+
+Existing judgments / defaults.
+
+For owners (≥10–15%):
+
+Each owner becomes an indemnitor and must sign.
+
+Their spouses also must sign to prevent asset shielding transfers. 
+
+Risk flags:
+
+Prior bond claims.
+
+Tax liens.
+
+Bankruptcy history.
+
+Very thin capital vs. huge judgment amount.
+
+You can encode these into a simple numeric risk score (0–100) stored on surety_underwriting_cases.principalRiskScore.
+
+4.3. Collateral decision rules
+From your material:
+
+Collateral is used when risk is high or bond types have high claim frequency.
+
+Acceptable forms: cash or ILOC.
+
+CDs, government securities, physical assets are generally not acceptable; real estate can be considered via separate process if you ever want to extend. 
+
+Example algorithm for Judgment Bonds:
+
+if principalRiskScore <= 30 and bondPenalSum <= 25,000:
+    collateralRequiredAmount = 0
+elif principalRiskScore <= 50 and bondPenalSum <= 100,000:
+    collateralRequiredAmount = 0.25 * bondPenalSum
+else:
+    collateralRequiredAmount = 1.0 * bondPenalSum  (100% collateral)
+And always limit collateral types to:
+
+["CASH", "ILOC"]
+The result is stored on:
+
+surety_underwriting_cases.collateralRequiredAmount
+
+surety_collateral record(s).
+
+4.4. Underwriting outcome object
+The underwriting service (e.g. underwriteJudgmentBondSurety(caseId)) should output:
+
+type UnderwritingDecision =
+  | "DECLINED"
+  | "APPROVED"
+  | "APPROVED_WITH_COLLATERAL";
+
+interface SuretyUnderwritingResult {
+  decision: UnderwritingDecision;
+  reasons: string[];      // bullet list used in the admin UI & in the underwriting report
+  collateralRequired: number;
+  collateralTypesAllowed: ("CASH" | "ILOC")[];
+  indemnitors: {
+    partyId: string;
+    role: "PRINCIPAL_ENTITY" | "OWNER" | "SPOUSE" | "TRUST";
+  }[];
+  insuranceRequired: boolean;
+}
+The Admin can view this result in the Surety UI, adjust if needed, then click “Generate Documents”.
+
+5. Document Automation (GIA, Collateral Agreement, Trust Resolution)
+Using your PDF on GIAs, we can build templates that include the standard provisions:
+
+Indemnification – broad hold-harmless for all losses, costs, attorneys’ fees. 
+
+Right to enforce – surety can sue indemnitors for failure to comply (e.g., not posting collateral). 
+
+Right to settle – surety has exclusive right to decide whether to pay/settle/defend claims. 
+
+Collateral-deposit – surety can demand collateral, and can use it to pay claims. 
+
+Assignment – assignment of contract proceeds & rights, if needed. 
+
+Books & records – right to inspect principal’s books. 
+
+Duty to cooperate – indemnitors must assist in claims handling. 
+
+5.1. Template strategy
+Create a surety/templates/ folder in your backend, and define templates in something like Handlebars, EJS, or even JSON-to-PDF.
+
+Example placeholders for GIA:
+
+{{suretyTrustName}}
+
+{{principalEntityName}}
+
+{{ownersList}} (with names, % ownership)
+
+{{spousesList}}
+
+{{bondDescription}} (“Judgment Bond for Case #…”)
+
+{{bondPenalSum}}
+
+{{collateralClause}} – generated from underwriting result
+
+{{trustResolutionReference}}
+
+The app:
+
+Runs underwriting.
+
+Assembles a DocContext object with all relevant fields.
+
+Renders:
+
+GIA (general indemnity agreement)
+
+CollateralAgreement
+
+TrustResolution authorizing the trust to act as surety for this specific bond and amount.
+
+Stores them as records in surety_documents.
+
+(Optionally) pushes them to Adobe Sign / DocuSign for signature and tracks the envelope IDs.
+
+You’ll want your Trust Resolution to specifically show that the trustee fulfilled their duty of due diligence (review of bond, risk evaluation, capacity, indemnity terms, collateral). 
+
+6. Admin Dashboard UX: The “Surety” Button & Workflow
+6.1. Dashboard entry point
+On the Admin dashboard:
+
+A card or button labelled “Surety – Judgment Bonds”.
+
+Tagline: “Internal surety underwriting & indemnity docs (Admin-only).”
+
+Clicking triggers:
+
+Surety PIN modal.
+
+If OK, you’re routed to /admin/surety.
+
+6.2. Surety Home Screen
+Tabs:
+
+Open Cases
+
+List of surety_underwriting_cases where status IN ("DRAFT", "IN_REVIEW", "APPROVED_WITH_COLLATERAL", "DOCS_PENDING_SIGNATURE").
+
+Active Obligations
+
+Cases where status = "ACTIVE" (surety in force).
+
+Released
+
+Cases where status = "RELEASED" (bond expired / judgment satisfied).
+
+Trust Snapshot
+
+Current exposure vs limits for the trust:
+
+currentExposure / aggregateBondLimit
+
+Count of active bonds
+
+Collateral on hand vs required
+
+6.3. New Judgment Surety Workflow (Wizard)
+Select Bond
+
+Choose a JUDGMENT type bond from your bonds table.
+
+App checks: if not judgment, block: “Surety feature is restricted to Judgment Bonds only.”
+
+Confirm Principal & Ownership
+
+Display principal’s basic info + owners/spouses from your existing CRM.
+
+Let Admin adjust which indemnitors should be included (owners ≥10%, spouses, affiliates, trust).
+
+Set Terms
+
+bondPenalSum (pulled from bond, but editable if needed).
+
+Effective date, expected duration.
+
+Run Underwriting
+
+Calls underwriteJudgmentBondSurety(caseId).
+
+Shows decision + reasons + collateral requirement.
+
+Configure GIA & Collateral
+
+Admin can tweak minor text (e.g., limited trust indemnity to a fixed dollar cap).
+
+Confirm collateral amount and type(s).
+
+Generate Docs
+
+Button: “Generate GIA & Collateral Package”
+
+Creates surety_documents and presents PDFs for review.
+
+Send for signature
+
+Button for “Send via e-sign” (future integration).
+
+Once all surety_indemnitors.signatureStatus === "SIGNED" ⇒ case can be set to ACTIVE.
+
+7. Integration With the Rest of the Bond App
+On your Bond record, add:
+
+suretyCaseId (fk → surety_underwriting_cases)
+
+suretyStatus (enum: NONE | IN_UNDERWRITING | APPROVED | ACTIVE | RELEASED)
+
+suretyTrustId
+
+For Bond Exchange eligibility:
+
+Only allow a judgment bond onto the Exchange if:
+
+suretyStatus = "ACTIVE"
+
+suretyCase.status = "ACTIVE"
+
+All required docs fully executed.
+
+That way:
+
+ADMIN uses the Surety module to underwrite & paper the judgment bond.
+
+Once everything is in place, the bond can automatically transition into the Bond Exchange pipeline (if that’s your business logic) knowing it’s backed by a properly underwritten surety structure.
+
+8. Legal/Compliance Note
+This Surety module is built to mirror standard industry practice and the key elements from your surety responsibility memo and GIA explanation, but:
+
+It does not replace a licensed surety, attorney, or regulator.
+
+You should have a qualified attorney review:
+
+Your GIA template,
+
+Collateral agreement,
+
+Trust resolution,
+
+And overall trust authority to act as surety.
+
+If you’d like, next step I can:
+
+Turn this blueprint into actual TypeScript code (Drizzle schema + Express routes + React Admin UI) and ship it as a Replit-ready zip, wired consistently with the Bond Exchange module we just built.
+
+You said:
+Turn this blueprint into actual TypeScript code (Drizzle schema + Express routes + React Admin UI) and ship it as a Replit-ready zip, wired consistently with the Bond Exchange module we just built.                                                                                                                                                                             Ensure to Adapt the code snippets exactly to your current app layout (e.g. Next.js API routes instead of Express. Ship to me as a replit.com ready zip file that I can upload.
+ChatGPT said:
+
+Thought for 34s
+Here’s your combined Bond Exchange + Surety underwriting module as a Replit-ready zip:
+
+👉 Download the bond_exchange_surety_app.zip
+
+This repo is:
+
+TypeScript + Express + Drizzle (Postgres) — same style as the Bond Exchange module.
+
+Includes:
+
+Bond Exchange investor routes (overview, auctions, bids).
+
+Surety schemas, underwriting service, and Admin-only routes.
+
+React components for Investors and Admin Surety panels.
+
+Ready to drop into Replit and run with npm install && npm run dev.
+
+What you get (high level)
+Backend
+
+src/index.ts – Express app:
+
+Demo auth stub (controlled by DEMO_ROLE env: ADMIN or INVESTOR).
+
+blockInvestorsForNonInvestorRoutes to hard-wall investors.
+
+Investor routes:
+
+/investor/overview
+
+/investor/auctions
+
+/investor/auctions/:id
+
+/investor/auctions/:id/bids
+
+/investor/my-bids
+
+Admin Surety routes:
+
+/admin/surety/cases
+
+/admin/surety/cases/:id
+
+/admin/surety/cases (POST) – create Judgment Surety case
+
+/admin/surety/cases/:id/underwrite
+
+/admin/surety/cases/:id/generate-docs
+
+/admin/surety/trusts/:id/snapshot
+
+Auth middleware
+
+requireAuth(roles)
+
+blockInvestorsForNonInvestorRoutes
+
+requireSuretyPin
+
+Expects header X-Surety-Pin to match SURETY_ADMIN_PIN env var.
+
+Ensures Admin-only + PIN for Surety.
+
+Drizzle schemas
+
+users – with role (ADMIN | UNDERWRITER | INTERNAL | INVESTOR).
+
+bonds – includes:
+
+bondType (JUDGMENT, etc.)
+
+suretyCaseId, suretyStatus, suretyTrustId
+
+auctions, auction_bids – Bond Exchange.
+
+surety_trusts – trust-level limits and flags.
+
+surety_cases – one per judgment bond Surety underwriting file.
+
+surety_indemnitors – who signs GIA (you’ll plug your actual people tables in).
+
+surety_collateral – collateral requirements/posting (CASH / ILOC).
+
+surety_documents – GIA / Collateral Agreement / Trust Resolution, etc.
+
+Services
+
+bondPerfection.ts – creates 5-day auctions when bonds are perfected.
+
+suretyUnderwriting.ts – implements the Judgment-bond underwriting rules:
+
+Trust authority & capacity checks.
+
+Collateral logic (0%, 25%, or 100% depending on risk/size).
+
+Insurance requirement flag.
+
+Returns:
+
+{
+  decision: "DECLINED" | "APPROVED" | "APPROVED_WITH_COLLATERAL",
+  reasons: string[],
+  collateralRequired: number,
+  collateralTypesAllowed: ["CASH","ILOC"],
+  insuranceRequired: boolean
+}
+Jobs
+
+closeExpiredAuctions.ts – marks ended ACTIVE auctions as EXPIRED.
+
+Frontend (React, drop-in)
+
+Investor side (frontend/investors/):
+
+InvestorOverview.tsx
+
+InvestorExchange.tsx
+
+InvestorMyBids.tsx
+
+Admin Surety (frontend/admin/surety/):
+
+SuretyDashboard.tsx – lists Surety cases (requires suretyPin prop → sent as X-Surety-Pin).
+
+NewJudgmentSuretyWizard.tsx – minimal wizard to:
+
+POST /admin/surety/cases
+
+immediately POST /admin/surety/cases/:id/underwrite
+
+frontend/README_integration.md explains wiring these into your existing frontend.
+
+Environment variables you must set in Replit
+In the Replit Secrets panel:
+
+DATABASE_URL – your Postgres connection string.
+
+SURETY_ADMIN_PIN – the Surety PIN required by all /admin/surety/* routes.
+
+DEMO_ROLE – optional; "ADMIN" or "INVESTOR" to toggle the demo user role.
+
+Then in the Replit shell:
+
+npm install
+npm run dev
+This gives you:
+
+Bond Exchange (investor side) with 5-day auctions and reserve-price “take-down”.
+
+Surety (Admin-only, PIN-protected) underwriting for Judgment Bonds only, with:
+
+Trust capacity checks,
+
+Collateral requirement logic (CASH/ILOC only),
+
+Placeholder GIA/Collateral/Trust-Resolution document records you can hook into your actual PDF/Docx generator and e-sign flow.
+
+If you want, next I can generate a quick Drizzle migration file template for all these tables so you can run it against your existing database. 
+
+You said:
+generate a quick Drizzle migration file template for all these tables so you can run it against your existing database. 
+ChatGPT said:
+
+Thought for 47s
+Here’s a ready-to-paste Drizzle SQL migration template for all the Bond Exchange + Surety tables.
+
+You can drop this into your project as:
+
+drizzle/migrations/0001_bond_exchange_surety.sql
+
+…and run it with your usual Drizzle migration command.
+
+⚠️ Important note if you already have users or bonds tables
+This file assumes you’re okay defining them as shown.
+If you already have users / bonds in your existing app:
+
+Delete or comment out the CREATE TABLE IF NOT EXISTS users and/or CREATE TABLE IF NOT EXISTS bonds sections.
+
+Instead, use ALTER TABLE statements (I include optional examples at the bottom).
+
+drizzle/migrations/0001_bond_exchange_surety.sql
+-- 0001_bond_exchange_surety.sql
+-- Bond Exchange + Surety tables for Postgres (Drizzle-compatible)
+
+-- UUID helper (for gen_random_uuid)
+CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+
+------------------------------------------------------------
+-- USERS (simple template – adjust if you already have this)
+------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS users (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  email text NOT NULL,
+  password_hash text NOT NULL,
+  role text NOT NULL DEFAULT 'INTERNAL' -- ADMIN | UNDERWRITER | INTERNAL | INVESTOR
+);
+
+------------------------------------------------------------
+-- BONDS (template – adjust/merge with your existing schema)
+------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS bonds (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  bond_type text NOT NULL DEFAULT 'OTHER',  -- e.g. 'JUDGMENT'
+  face_value numeric(18,2) NOT NULL,
+  is_perfected boolean NOT NULL DEFAULT false,
+  perfected_at timestamptz,
+  expected_perfected_at timestamptz,
+  current_auction_id uuid,
+  surety_case_id uuid,
+  surety_status text NOT NULL DEFAULT 'NONE', -- NONE | IN_UNDERWRITING | APPROVED | ACTIVE | RELEASED
+  surety_trust_id uuid
+);
+
+------------------------------------------------------------
+-- AUCTIONS (Bond Exchange)
+------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS auctions (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  bond_id uuid NOT NULL REFERENCES bonds(id) ON DELETE CASCADE,
+  status text NOT NULL DEFAULT 'PENDING',   -- PENDING | ACTIVE | RESERVE_MET | COMPLETED | CANCELLED | EXPIRED
+  starts_at timestamptz NOT NULL,
+  ends_at timestamptz NOT NULL,
+  reserve_price numeric(18,2) NOT NULL,
+  winning_bid_id uuid,
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_auctions_bond_id ON auctions (bond_id);
+
+------------------------------------------------------------
+-- AUCTION BIDS
+------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS auction_bids (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  auction_id uuid NOT NULL REFERENCES auctions(id) ON DELETE CASCADE,
+  investor_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  amount numeric(18,2) NOT NULL,
+  placed_at timestamptz DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_auction_bids_auction_id ON auction_bids (auction_id);
+CREATE INDEX IF NOT EXISTS idx_auction_bids_investor_id ON auction_bids (investor_id);
+
+------------------------------------------------------------
+-- SURETY TRUSTS (the trust/entity acting as surety)
+------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS surety_trusts (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  name text NOT NULL,
+  trust_type text NOT NULL DEFAULT 'IRREVOCABLE',    -- REVOCABLE | IRREVOCABLE | OTHER
+  can_act_as_surety boolean NOT NULL DEFAULT true,
+  allowed_bond_types text NOT NULL DEFAULT '["JUDGMENT"]', -- JSON string; can switch to jsonb later
+  max_single_bond_limit numeric(18,2) NOT NULL,
+  aggregate_bond_limit numeric(18,2) NOT NULL,
+  current_exposure numeric(18,2) NOT NULL DEFAULT 0,
+  requires_insurance_above numeric(18,2) NOT NULL DEFAULT 0,
+  notes text
+);
+
+------------------------------------------------------------
+-- SURETY CASES (one underwriting file per bond)
+------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS surety_cases (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  bond_id uuid NOT NULL REFERENCES bonds(id) ON DELETE CASCADE,
+  surety_trust_id uuid NOT NULL REFERENCES surety_trusts(id) ON DELETE RESTRICT,
+  status text NOT NULL DEFAULT 'DRAFT',           -- DRAFT | IN_REVIEW | APPROVED | DECLINED | APPROVED_WITH_COLLATERAL | DOCS_PENDING_SIGNATURE | ACTIVE | RELEASED
+  bond_type text NOT NULL DEFAULT 'JUDGMENT',
+  bond_penal_sum numeric(18,2) NOT NULL,
+  principal_id uuid,
+  principal_risk_score numeric(5,2),
+  collateral_required_amount numeric(18,2) NOT NULL DEFAULT 0,
+  collateral_type_allowed text NOT NULL DEFAULT '["CASH","ILOC"]',
+  indemnity_required text NOT NULL DEFAULT 'YES',
+  insurance_required text NOT NULL DEFAULT 'NO',
+  underwriter_user_id uuid REFERENCES users(id),
+  decision_at timestamptz,
+  notes text,
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_surety_cases_trust_id ON surety_cases (surety_trust_id);
+CREATE INDEX IF NOT EXISTS idx_surety_cases_bond_id ON surety_cases (bond_id);
+
+------------------------------------------------------------
+-- SURETY INDEMNITORS (who signs the GIA)
+------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS surety_indemnitors (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  case_id uuid NOT NULL REFERENCES surety_cases(id) ON DELETE CASCADE,
+  indemnitor_type text NOT NULL,   -- PRINCIPAL_ENTITY | OWNER | SPOUSE | TRUST | AFFILIATE
+  party_id uuid NOT NULL,
+  ownership_percent numeric(5,2),
+  is_spouse text NOT NULL DEFAULT 'NO',            -- YES | NO (simple text flag)
+  signature_status text NOT NULL DEFAULT 'PENDING', -- PENDING | SIGNED | DECLINED
+  signed_at timestamptz
+);
+
+CREATE INDEX IF NOT EXISTS idx_surety_indemnitors_case_id ON surety_indemnitors (case_id);
+
+------------------------------------------------------------
+-- SURETY COLLATERAL
+------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS surety_collateral (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  case_id uuid NOT NULL REFERENCES surety_cases(id) ON DELETE CASCADE,
+  required_amount numeric(18,2) NOT NULL,
+  posted_amount numeric(18,2) NOT NULL DEFAULT 0,
+  collateral_type text NOT NULL,     -- CASH | ILOC
+  iloc_bank_name text,
+  iloc_reference text,
+  held_from date,
+  release_eligible_date date,
+  released_at timestamptz,
+  status text NOT NULL DEFAULT 'PENDING' -- PENDING | POSTED | HELD | RELEASED
+);
+
+CREATE INDEX IF NOT EXISTS idx_surety_collateral_case_id ON surety_collateral (case_id);
+
+------------------------------------------------------------
+-- SURETY DOCUMENTS (GIA, Collateral Agreement, Trust Resolution, etc.)
+------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS surety_documents (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  case_id uuid NOT NULL REFERENCES surety_cases(id) ON DELETE CASCADE,
+  doc_type text NOT NULL,             -- GIA | COLLATERAL_AGREEMENT | TRUST_RESOLUTION | SURETY_COMMITMENT | UNDERWRITING_REPORT
+  storage_path text NOT NULL,         -- e.g. /docs/{caseId}/gia.pdf
+  esign_envelope_id text,
+  status text NOT NULL DEFAULT 'DRAFT', -- DRAFT | SENT_FOR_SIGNATURE | FULLY_EXECUTED | VOID
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_surety_documents_case_id ON surety_documents (case_id);
+Optional: ALTER TABLE helpers if you already have users / bonds
+If your existing app already has these tables, you can use something like this instead of the CREATE TABLE blocks above (adjust to match your real schema):
+
+-- If users table already exists, just ensure it has a role column
+ALTER TABLE users
+  ADD COLUMN IF NOT EXISTS role text NOT NULL DEFAULT 'INTERNAL';
+-- If bonds table already exists, add the Surety/Auction columns
+ALTER TABLE bonds
+  ADD COLUMN IF NOT EXISTS bond_type text NOT NULL DEFAULT 'OTHER',
+  ADD COLUMN IF NOT EXISTS face_value numeric(18,2),
+  ADD COLUMN IF NOT EXISTS is_perfected boolean NOT NULL DEFAULT false,
+  ADD COLUMN IF NOT EXISTS perfected_at timestamptz,
+  ADD COLUMN IF NOT EXISTS expected_perfected_at timestamptz,
+  ADD COLUMN IF NOT EXISTS current_auction_id uuid,
+  ADD COLUMN IF NOT EXISTS surety_case_id uuid,
+  ADD COLUMN IF NOT EXISTS surety_status text NOT NULL DEFAULT 'NONE',
+  ADD COLUMN IF NOT EXISTS surety_trust_id uuid;
+After running this migration, your DB will be ready for the bond_exchange_surety_app zip: the Drizzle schema files I shipped earlier match this SQL 1:1.
+
+If you want, I can also generate a drizzle.config.json sample wired exactly to this layout (Postgres + SQL migrator) so you can just drop everything into Replit and go.
+
+You said:
+I CANNOT LOSE ANY DATA AND BONDS OR BOND INFO THAT HAS ALREADY BEEN ENTERED OR CURRENTLY EXISTS IN THE APP.
+ChatGPT said:
+
+Thought for 20s
+Totally with you on that — we’re not going to drop or recreate bonds or touch existing data.
+
+Below is an additive-only migration: it only:
+
+Adds new columns to your existing bonds table (non-destructive).
+
+Leaves users completely alone (assumes you already have it).
+
+Creates new tables (auctions, auction_bids, surety_*) that reference bonds and users.
+
+Uses IF NOT EXISTS everywhere it can.
+
+💾 Still: make a backup or test on a staging copy first. But this script itself does not delete or overwrite any existing bond data.
+
+1. Safe additive migration file
+Save this as something like:
+
+drizzle/migrations/0002_bond_exchange_surety_additive.sql
+
+-- 0002_bond_exchange_surety_additive.sql
+-- Additive-only migration for Bond Exchange + Surety
+-- DOES NOT drop or recreate existing bonds or users.
+
+-- UUID helper (for gen_random_uuid)
+CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+
+------------------------------------------------------------
+-- 1) BONDS: add ONLY new columns (non-destructive)
+--    Adjust types if they conflict with your current schema.
+------------------------------------------------------------
+
+-- Type of bond (e.g., 'JUDGMENT'); default to 'OTHER' for existing rows.
+ALTER TABLE bonds
+  ADD COLUMN IF NOT EXISTS bond_type text;
+
+UPDATE bonds
+SET bond_type = 'OTHER'
+WHERE bond_type IS NULL;
+
+ALTER TABLE bonds
+  ALTER COLUMN bond_type SET DEFAULT 'OTHER';
+
+-- Face value, if you don’t already have such a column.
+-- If you DO already have a similar column with a different name/type,
+-- skip this and adjust the Drizzle schema instead.
+ALTER TABLE bonds
+  ADD COLUMN IF NOT EXISTS face_value numeric(18,2);
+
+-- Whether the bond is perfected
+ALTER TABLE bonds
+  ADD COLUMN IF NOT EXISTS is_perfected boolean NOT NULL DEFAULT false;
+
+-- Perfection timestamps
+ALTER TABLE bonds
+  ADD COLUMN IF NOT EXISTS perfected_at timestamptz;
+
+ALTER TABLE bonds
+  ADD COLUMN IF NOT EXISTS expected_perfected_at timestamptz;
+
+-- Link to current auction (for the Bond Exchange)
+ALTER TABLE bonds
+  ADD COLUMN IF NOT EXISTS current_auction_id uuid;
+
+-- Surety linkage
+ALTER TABLE bonds
+  ADD COLUMN IF NOT EXISTS surety_case_id uuid;
+
+ALTER TABLE bonds
+  ADD COLUMN IF NOT EXISTS surety_status text NOT NULL DEFAULT 'NONE';
+
+ALTER TABLE bonds
+  ADD COLUMN IF NOT EXISTS surety_trust_id uuid;
+
+------------------------------------------------------------
+-- 2) AUCTIONS (Bond Exchange)
+------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS auctions (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  bond_id uuid NOT NULL REFERENCES bonds(id) ON DELETE CASCADE,
+  status text NOT NULL DEFAULT 'PENDING',   -- PENDING | ACTIVE | RESERVE_MET | COMPLETED | CANCELLED | EXPIRED
+  starts_at timestamptz NOT NULL,
+  ends_at timestamptz NOT NULL,
+  reserve_price numeric(18,2) NOT NULL,
+  winning_bid_id uuid,
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_auctions_bond_id ON auctions (bond_id);
+
+------------------------------------------------------------
+-- 3) AUCTION BIDS
+------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS auction_bids (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  auction_id uuid NOT NULL REFERENCES auctions(id) ON DELETE CASCADE,
+  investor_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  amount numeric(18,2) NOT NULL,
+  placed_at timestamptz DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_auction_bids_auction_id ON auction_bids (auction_id);
+CREATE INDEX IF NOT EXISTS idx_auction_bids_investor_id ON auction_bids (investor_id);
+
+------------------------------------------------------------
+-- 4) SURETY TRUSTS (trust/entity acting as surety)
+------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS surety_trusts (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  name text NOT NULL,
+  trust_type text NOT NULL DEFAULT 'IRREVOCABLE',    -- REVOCABLE | IRREVOCABLE | OTHER
+  can_act_as_surety boolean NOT NULL DEFAULT true,
+  allowed_bond_types text NOT NULL DEFAULT '["JUDGMENT"]', -- JSON string; optionally switch to jsonb later
+  max_single_bond_limit numeric(18,2) NOT NULL,
+  aggregate_bond_limit numeric(18,2) NOT NULL,
+  current_exposure numeric(18,2) NOT NULL DEFAULT 0,
+  requires_insurance_above numeric(18,2) NOT NULL DEFAULT 0,
+  notes text
+);
+
+------------------------------------------------------------
+-- 5) SURETY CASES (underwriting file per bond)
+------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS surety_cases (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  bond_id uuid NOT NULL REFERENCES bonds(id) ON DELETE CASCADE,
+  surety_trust_id uuid NOT NULL REFERENCES surety_trusts(id) ON DELETE RESTRICT,
+  status text NOT NULL DEFAULT 'DRAFT',           -- DRAFT | IN_REVIEW | APPROVED | DECLINED | APPROVED_WITH_COLLATERAL | DOCS_PENDING_SIGNATURE | ACTIVE | RELEASED
+  bond_type text NOT NULL DEFAULT 'JUDGMENT',
+  bond_penal_sum numeric(18,2) NOT NULL,
+  principal_id uuid,
+  principal_risk_score numeric(5,2),
+  collateral_required_amount numeric(18,2) NOT NULL DEFAULT 0,
+  collateral_type_allowed text NOT NULL DEFAULT '["CASH","ILOC"]',
+  indemnity_required text NOT NULL DEFAULT 'YES',
+  insurance_required text NOT NULL DEFAULT 'NO',
+  underwriter_user_id uuid REFERENCES users(id),
+  decision_at timestamptz,
+  notes text,
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_surety_cases_trust_id ON surety_cases (surety_trust_id);
+CREATE INDEX IF NOT EXISTS idx_surety_cases_bond_id ON surety_cases (bond_id);
+
+------------------------------------------------------------
+-- 6) SURETY INDEMNITORS (who signs the GIA)
+------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS surety_indemnitors (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  case_id uuid NOT NULL REFERENCES surety_cases(id) ON DELETE CASCADE,
+  indemnitor_type text NOT NULL,   -- PRINCIPAL_ENTITY | OWNER | SPOUSE | TRUST | AFFILIATE
+  party_id uuid NOT NULL,
+  ownership_percent numeric(5,2),
+  is_spouse text NOT NULL DEFAULT 'NO',            -- YES | NO
+  signature_status text NOT NULL DEFAULT 'PENDING', -- PENDING | SIGNED | DECLINED
+  signed_at timestamptz
+);
+
+CREATE INDEX IF NOT EXISTS idx_surety_indemnitors_case_id ON surety_indemnitors (case_id);
+
+------------------------------------------------------------
+-- 7) SURETY COLLATERAL
+------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS surety_collateral (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  case_id uuid NOT NULL REFERENCES surety_cases(id) ON DELETE CASCADE,
+  required_amount numeric(18,2) NOT NULL,
+  posted_amount numeric(18,2) NOT NULL DEFAULT 0,
+  collateral_type text NOT NULL,     -- CASH | ILOC
+  iloc_bank_name text,
+  iloc_reference text,
+  held_from date,
+  release_eligible_date date,
+  released_at timestamptz,
+  status text NOT NULL DEFAULT 'PENDING' -- PENDING | POSTED | HELD | RELEASED
+);
+
+CREATE INDEX IF NOT EXISTS idx_surety_collateral_case_id ON surety_collateral (case_id);
+
+------------------------------------------------------------
+-- 8) SURETY DOCUMENTS (GIA, Collateral Agreement, Trust Resolution, etc.)
+------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS surety_documents (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  case_id uuid NOT NULL REFERENCES surety_cases(id) ON DELETE CASCADE,
+  doc_type text NOT NULL,             -- GIA | COLLATERAL_AGREEMENT | TRUST_RESOLUTION | SURETY_COMMITMENT | UNDERWRITING_REPORT
+  storage_path text NOT NULL,         -- e.g. /docs/{caseId}/gia.pdf
+  esign_envelope_id text,
+  status text NOT NULL DEFAULT 'DRAFT', -- DRAFT | SENT_FOR_SIGNATURE | FULLY_EXECUTED | VOID
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_surety_documents_case_id ON surety_documents (case_id);
+2. How this avoids data loss
+We never DROP or recreate bonds.
+
+We only ALTER TABLE bonds ADD COLUMN IF NOT EXISTS …
+→ existing rows keep all their data exactly as-is.
+
+New columns (e.g., is_perfected, surety_status) just get defaults.
+
+All new tables (auctions, surety_*) are additive; they don’t touch existing rows.
+
+If you know your bonds table already has bond_type or face_value columns with different types/names:
+
+You can safely delete or comment out those specific ALTER TABLE … ADD COLUMN lines and:
+
+Adjust the Drizzle schema in the zip to match your real column names/types or
+
+Map them via a view or by renaming columns.
+
+3. Practical safety steps
+Backup first
+
+pg_dump your production DB or snapshot it.
+
+Test on a clone
+
+Restore your DB into a dev/staging database.
+
+Point the Replit project at that dev DB (DATABASE_URL).
+
+Run this migration there.
+
+Verify
+
+Check that:
+
+Existing bonds & data are untouched.
+
+New columns show up.
+
+New tables exist and match the Drizzle schema from the bond_exchange_surety_app.zip.
+
+Then run on production
+
+Once you’re happy with dev/staging, run the migration on the live DB.
+
+If you’d like, I can also give you the Drizzle TypeScript migration equivalent instead of raw SQL (using pgTable, migrate, etc.) so it plugs right into your existing drizzle-kit workflow without guessing.
+
+You said:
+give me the Drizzle TypeScript migration equivalent instead of raw SQL (using pgTable, migrate, etc.) so it plugs right into my existing drizzle-kit workflow without guessing.
+ChatGPT said:
+
+Thought for 41s
+Gotcha—no data loss, no guessing, and it needs to fit your drizzle-kit workflow.
+
+One important nuance first:
+
+🔧 With Drizzle, the TypeScript side is your pgTable schema;
+drizzle-kit then uses that schema to generate the actual .sql migrations.
+You normally don’t write TS migrations directly—the TS schema is the “migration source of truth”.
+
+So the “TypeScript migration equivalent” you’re asking for is:
+
+Updated/added pgTable definitions for:
+
+new columns on bonds (non-destructive),
+
+new tables: auctions, auction_bids, surety_trusts, surety_cases, surety_indemnitors, surety_collateral, surety_documents.
+
+A drizzle.config.ts wired to those schema files.
+
+Then you run:
+
+npx drizzle-kit generate:pg --name add_bond_exchange_surety
+and drizzle-kit emits the SQL migration file for you.
+
+Below is exactly what to paste so drizzle-kit can do its thing.
+
+1. Schema: extend your existing bonds table (non-destructive)
+Assuming you have something like src/db/schema/bonds.ts, merge these columns in (do not remove your existing columns):
+
+// src/db/schema/bonds.ts
+import {
+  pgTable,
+  uuid,
+  numeric,
+  boolean,
+  timestamp,
+  text,
+} from "drizzle-orm/pg-core";
+
+export const bonds = pgTable("bonds", {
+  // ✅ keep your existing columns here (id, whatever you already have)
+  id: uuid("id").primaryKey().defaultRandom(),
+
+  // 🔽 NEW columns for Bond Exchange + Surety (all additive)
+  bondType: text("bond_type").notNull().default("OTHER"), // e.g. "JUDGMENT"
+
+  // If you already have a face value column under a different name/type,
+  // either:
+  //  - rename it to faceValue & numeric(18,2), OR
+  //  - remove this line and adjust the rest of the code to your existing field.
+  faceValue: numeric("face_value", { precision: 18, scale: 2 }).notNull(),
+
+  isPerfected: boolean("is_perfected").notNull().default(false),
+  perfectedAt: timestamp("perfected_at", { withTimezone: true }),
+  expectedPerfectedAt: timestamp("expected_perfected_at", {
+    withTimezone: true,
+  }),
+
+  currentAuctionId: uuid("current_auction_id"),
+
+  // Surety linkage (all optional / additive)
+  suretyCaseId: uuid("surety_case_id"),
+  suretyStatus: text("surety_status").notNull().default("NONE"),
+  suretyTrustId: uuid("surety_trust_id"),
+
+  // ...your other existing bond fields (caseNo, borrower name, etc.)
+});
+If some of these already exist in your schema, keep your version and just ensure the names match what the Bond Exchange + Surety code expects.
+
+2. New tables – Bond Exchange
+auctions
+// src/db/schema/auctions.ts
+import {
+  pgTable,
+  uuid,
+  timestamp,
+  numeric,
+  text,
+} from "drizzle-orm/pg-core";
+import { bonds } from "./bonds";
+
+export const auctions = pgTable("auctions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  bondId: uuid("bond_id")
+    .notNull()
+    .references(() => bonds.id, { onDelete: "cascade" }),
+
+  status: text("status").notNull().default("PENDING"), // PENDING | ACTIVE | RESERVE_MET | COMPLETED | CANCELLED | EXPIRED
+  startsAt: timestamp("starts_at", { withTimezone: true }).notNull(),
+  endsAt: timestamp("ends_at", { withTimezone: true }).notNull(),
+  reservePrice: numeric("reserve_price", { precision: 18, scale: 2 }).notNull(),
+  winningBidId: uuid("winning_bid_id"),
+
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+});
+auction_bids
+// src/db/schema/auctionBids.ts
+import {
+  pgTable,
+  uuid,
+  numeric,
+  timestamp,
+} from "drizzle-orm/pg-core";
+import { auctions } from "./auctions";
+import { users } from "./users";
+
+export const auctionBids = pgTable("auction_bids", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  auctionId: uuid("auction_id")
+    .notNull()
+    .references(() => auctions.id, { onDelete: "cascade" }),
+  investorId: uuid("investor_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  amount: numeric("amount", { precision: 18, scale: 2 }).notNull(),
+  placedAt: timestamp("placed_at", { withTimezone: true }).defaultNow(),
+});
+3. New tables – Surety module
+surety_trusts
+// src/db/schema/suretyTrusts.ts
+import { pgTable, uuid, text, boolean, numeric } from "drizzle-orm/pg-core";
+
+export const suretyTrusts = pgTable("surety_trusts", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  name: text("name").notNull(),
+  trustType: text("trust_type").notNull().default("IRREVOCABLE"), // REVOCABLE | IRREVOCABLE | OTHER
+  canActAsSurety: boolean("can_act_as_surety").notNull().default(true),
+  // stringified JSON list; you can later change to jsonb if you like
+  allowedBondTypes: text("allowed_bond_types")
+    .notNull()
+    .default('["JUDGMENT"]'),
+
+  maxSingleBondLimit: numeric("max_single_bond_limit", {
+    precision: 18,
+    scale: 2,
+  }).notNull(),
+  aggregateBondLimit: numeric("aggregate_bond_limit", {
+    precision: 18,
+    scale: 2,
+  }).notNull(),
+  currentExposure: numeric("current_exposure", {
+    precision: 18,
+    scale: 2,
+  })
+    .notNull()
+    .default("0"),
+
+  requiresInsuranceAbove: numeric("requires_insurance_above", {
+    precision: 18,
+    scale: 2,
+  })
+    .notNull()
+    .default("0"),
+
+  notes: text("notes"),
+});
+surety_cases
+// src/db/schema/suretyCases.ts
+import {
+  pgTable,
+  uuid,
+  text,
+  numeric,
+  timestamp,
+} from "drizzle-orm/pg-core";
+import { suretyTrusts } from "./suretyTrusts";
+import { bonds } from "./bonds";
+import { users } from "./users";
+
+export const suretyCases = pgTable("surety_cases", {
+  id: uuid("id").primaryKey().defaultRandom(),
+
+  bondId: uuid("bond_id")
+    .notNull()
+    .references(() => bonds.id, { onDelete: "cascade" }),
+
+  suretyTrustId: uuid("surety_trust_id")
+    .notNull()
+    .references(() => suretyTrusts.id, { onDelete: "restrict" }),
+
+  status: text("status").notNull().default("DRAFT"), // DRAFT | IN_REVIEW | APPROVED | DECLINED | APPROVED_WITH_COLLATERAL | DOCS_PENDING_SIGNATURE | ACTIVE | RELEASED
+
+  bondType: text("bond_type").notNull().default("JUDGMENT"),
+  bondPenalSum: numeric("bond_penal_sum", { precision: 18, scale: 2 }).notNull(),
+
+  principalId: uuid("principal_id"), // fk to your principals table if you have one
+  principalRiskScore: numeric("principal_risk_score", {
+    precision: 5,
+    scale: 2,
+  }),
+
+  collateralRequiredAmount: numeric("collateral_required_amount", {
+    precision: 18,
+    scale: 2,
+  })
+    .notNull()
+    .default("0"),
+
+  collateralTypeAllowed: text("collateral_type_allowed")
+    .notNull()
+    .default('["CASH","ILOC"]'),
+
+  indemnityRequired: text("indemnity_required").notNull().default("YES"),
+  insuranceRequired: text("insurance_required").notNull().default("NO"),
+
+  underwriterUserId: uuid("underwriter_user_id").references(() => users.id),
+  decisionAt: timestamp("decision_at", { withTimezone: true }),
+
+  notes: text("notes"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+});
+surety_indemnitors
+// src/db/schema/suretyIndemnitors.ts
+import {
+  pgTable,
+  uuid,
+  numeric,
+  text,
+  timestamp,
+} from "drizzle-orm/pg-core";
+import { suretyCases } from "./suretyCases";
+
+export const suretyIndemnitors = pgTable("surety_indemnitors", {
+  id: uuid("id").primaryKey().defaultRandom(),
+
+  caseId: uuid("case_id")
+    .notNull()
+    .references(() => suretyCases.id, { onDelete: "cascade" }),
+
+  indemnitorType: text("indemnitor_type").notNull(), // PRINCIPAL_ENTITY | OWNER | SPOUSE | TRUST | AFFILIATE
+  partyId: uuid("party_id").notNull(),
+
+  ownershipPercent: numeric("ownership_percent", {
+    precision: 5,
+    scale: 2,
+  }),
+
+  isSpouse: text("is_spouse").notNull().default("NO"), // YES | NO
+  signatureStatus: text("signature_status").notNull().default("PENDING"),
+  signedAt: timestamp("signed_at", { withTimezone: true }),
+});
+surety_collateral
+// src/db/schema/suretyCollateral.ts
+import {
+  pgTable,
+  uuid,
+  numeric,
+  text,
+  date,
+  timestamp,
+} from "drizzle-orm/pg-core";
+import { suretyCases } from "./suretyCases";
+
+export const suretyCollateral = pgTable("surety_collateral", {
+  id: uuid("id").primaryKey().defaultRandom(),
+
+  caseId: uuid("case_id")
+    .notNull()
+    .references(() => suretyCases.id, { onDelete: "cascade" }),
+
+  requiredAmount: numeric("required_amount", {
+    precision: 18,
+    scale: 2,
+  }).notNull(),
+
+  postedAmount: numeric("posted_amount", {
+    precision: 18,
+    scale: 2,
+  })
+    .notNull()
+    .default("0"),
+
+  collateralType: text("collateral_type").notNull(), // CASH | ILOC
+
+  ilocBankName: text("iloc_bank_name"),
+  ilocReference: text("iloc_reference"),
+
+  heldFrom: date("held_from"),
+  releaseEligibleDate: date("release_eligible_date"),
+  releasedAt: timestamp("released_at", { withTimezone: true }),
+
+  status: text("status").notNull().default("PENDING"), // PENDING | POSTED | HELD | RELEASED
+});
+surety_documents
+// src/db/schema/suretyDocuments.ts
+import {
+  pgTable,
+  uuid,
+  text,
+  timestamp,
+} from "drizzle-orm/pg-core";
+import { suretyCases } from "./suretyCases";
+
+export const suretyDocuments = pgTable("surety_documents", {
+  id: uuid("id").primaryKey().defaultRandom(),
+
+  caseId: uuid("case_id")
+    .notNull()
+    .references(() => suretyCases.id, { onDelete: "cascade" }),
+
+  docType: text("doc_type").notNull(), // GIA | COLLATERAL_AGREEMENT | TRUST_RESOLUTION | SURETY_COMMITMENT | UNDERWRITING_REPORT
+  storagePath: text("storage_path").notNull(),
+  eSignEnvelopeId: text("esign_envelope_id"),
+
+  status: text("status").notNull().default("DRAFT"), // DRAFT | SENT_FOR_SIGNATURE | FULLY_EXECUTED | VOID
+
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+});
+4. Hook everything into your db index
+In your src/db/index.ts (or similar), make sure you export these:
+
+// src/db/index.ts
+import { drizzle } from "drizzle-orm/node-postgres";
+import { Pool } from "pg";
+
+import * as usersSchema from "./schema/users";
+import * as bondsSchema from "./schema/bonds";
+import * as auctionsSchema from "./schema/auctions";
+import * as auctionBidsSchema from "./schema/auctionBids";
+import * as suretyTrustsSchema from "./schema/suretyTrusts";
+import * as suretyCasesSchema from "./schema/suretyCases";
+import * as suretyIndemnitorsSchema from "./schema/suretyIndemnitors";
+import * as suretyCollateralSchema from "./schema/suretyCollateral";
+import * as suretyDocumentsSchema from "./schema/suretyDocuments";
+
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+});
+
+export const db = drizzle(pool, {
+  schema: {
+    ...usersSchema,
+    ...bondsSchema,
+    ...auctionsSchema,
+    ...auctionBidsSchema,
+    ...suretyTrustsSchema,
+    ...suretyCasesSchema,
+    ...suretyIndemnitorsSchema,
+    ...suretyCollateralSchema,
+    ...suretyDocumentsSchema,
+  },
+});
+
+export * from "./schema/users";
+export * from "./schema/bonds";
+export * from "./schema/auctions";
+export * from "./schema/auctionBids";
+export * from "./schema/suretyTrusts";
+export * from "./schema/suretyCases";
+export * from "./schema/suretyIndemnitors";
+export * from "./schema/suretyCollateral";
+export * from "./schema/suretyDocuments";
+5. drizzle.config.ts for drizzle-kit
+Example:
+
+// drizzle.config.ts
+import type { Config } from "drizzle-kit";
+
+export default {
+  schema: "./src/db/schema/**/*.{ts,js}",
+  out: "./drizzle/migrations",
+  driver: "pg",
+  dbCredentials: {
+    connectionString: process.env.DATABASE_URL!,
+  },
+} satisfies Config;
+Make sure DATABASE_URL is set in your environment when you run drizzle-kit.
+
+6. Generate the migration (no guessing, no data loss)
+Once the schema files are in place:
+
+npx drizzle-kit generate:pg --name add_bond_exchange_surety
+drizzle-kit will:
+
+Connect to your existing DB.
+
+Compare it with the new TS schema.
+
+Emit a SQL migration in drizzle/migrations/ that:
+
+Adds new columns to bonds (non-destructive),
+
+Creates auctions, auction_bids, and all surety_* tables,
+
+Never drops your existing bonds data.
+
+You can inspect that generated .sql before running it on production to confirm it does exactly what you expect.

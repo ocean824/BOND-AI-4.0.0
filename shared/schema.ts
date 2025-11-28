@@ -97,6 +97,12 @@ export const bonds = pgTable("bonds", {
   expectedPerfectedAt: timestamp("expected_perfected_at", { withTimezone: true }),
   currentAuctionId: integer("current_auction_id"),
   
+  // Surety fields
+  bondType: varchar("bond_type", { length: 50 }).notNull().default("JUDGMENT"),
+  suretyCaseId: integer("surety_case_id"),
+  suretyTrustId: integer("surety_trust_id"),
+  suretyStatus: varchar("surety_status", { length: 50 }).default("NONE"), // NONE | IN_UNDERWRITING | APPROVED | DECLINED
+  
   status: varchar("status", { length: 50 }).notNull().default("draft"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
@@ -195,6 +201,84 @@ export const underwritingParties = pgTable("underwriting_parties", {
   id: serial("id").primaryKey(),
   caseId: integer("case_id").notNull().references(() => underwritingCases.id, { onDelete: "cascade" }),
   partyData: jsonb("party_data").notNull().$type<Record<string, unknown>>(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+// ===== SURETY SYSTEM TABLES =====
+// Surety trusts that can act as surety for judgment bonds
+export const suretyTrusts = pgTable("surety_trusts", {
+  id: serial("id").primaryKey(),
+  name: varchar("name", { length: 255 }).notNull(),
+  trustType: varchar("trust_type", { length: 50 }).notNull().default("IRREVOCABLE"), // REVOCABLE | IRREVOCABLE | OTHER
+  canActAsSurety: boolean("can_act_as_surety").notNull().default(true),
+  allowedBondTypes: jsonb("allowed_bond_types").$type<string[]>().default(["JUDGMENT"]),
+  maxSingleBondLimit: decimal("max_single_bond_limit", { precision: 18, scale: 2 }).notNull(),
+  aggregateBondLimit: decimal("aggregate_bond_limit", { precision: 18, scale: 2 }).notNull(),
+  currentExposure: decimal("current_exposure", { precision: 18, scale: 2 }).notNull().default("0"),
+  requiresInsuranceAbove: decimal("requires_insurance_above", { precision: 18, scale: 2 }).notNull().default("0"),
+  notes: text("notes"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+// Surety case status: DRAFT | IN_REVIEW | APPROVED | DECLINED | APPROVED_WITH_COLLATERAL | DOCS_PENDING_SIGNATURE | ACTIVE | RELEASED
+export const suretyCases = pgTable("surety_cases", {
+  id: serial("id").primaryKey(),
+  bondId: integer("bond_id").notNull().references(() => bonds.id, { onDelete: "cascade" }),
+  suretyTrustId: integer("surety_trust_id").notNull().references(() => suretyTrusts.id, { onDelete: "restrict" }),
+  status: varchar("status", { length: 50 }).notNull().default("DRAFT"),
+  bondType: varchar("bond_type", { length: 50 }).notNull().default("JUDGMENT"),
+  bondPenalSum: decimal("bond_penal_sum", { precision: 18, scale: 2 }).notNull(),
+  principalId: integer("principal_id"),
+  principalRiskScore: decimal("principal_risk_score", { precision: 5, scale: 2 }),
+  collateralRequiredAmount: decimal("collateral_required_amount", { precision: 18, scale: 2 }).notNull().default("0"),
+  collateralTypeAllowed: jsonb("collateral_type_allowed").$type<string[]>().default(["CASH", "ILOC"]),
+  indemnityRequired: varchar("indemnity_required", { length: 10 }).notNull().default("YES"),
+  insuranceRequired: varchar("insurance_required", { length: 10 }).notNull().default("NO"),
+  underwriterUserId: integer("underwriter_user_id").references(() => users.id),
+  decisionAt: timestamp("decision_at", { withTimezone: true }),
+  notes: text("notes"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+// Surety indemnitors for a case
+export const suretyIndemnitors = pgTable("surety_indemnitors", {
+  id: serial("id").primaryKey(),
+  caseId: integer("case_id").notNull().references(() => suretyCases.id, { onDelete: "cascade" }),
+  indemnitorType: varchar("indemnitor_type", { length: 50 }).notNull(), // PRINCIPAL_ENTITY | OWNER | SPOUSE | TRUST | AFFILIATE
+  partyId: integer("party_id").notNull(),
+  ownershipPercent: decimal("ownership_percent", { precision: 5, scale: 2 }),
+  isSpouse: varchar("is_spouse", { length: 10 }).notNull().default("NO"),
+  signatureStatus: varchar("signature_status", { length: 20 }).notNull().default("PENDING"),
+  signedAt: timestamp("signed_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+// Surety collateral tracking
+export const suretyCollateral = pgTable("surety_collateral", {
+  id: serial("id").primaryKey(),
+  caseId: integer("case_id").notNull().references(() => suretyCases.id, { onDelete: "cascade" }),
+  requiredAmount: decimal("required_amount", { precision: 18, scale: 2 }).notNull(),
+  postedAmount: decimal("posted_amount", { precision: 18, scale: 2 }).notNull().default("0"),
+  collateralType: varchar("collateral_type", { length: 20 }).notNull(), // CASH | ILOC
+  ilocBankName: varchar("iloc_bank_name", { length: 255 }),
+  ilocReference: varchar("iloc_reference", { length: 255 }),
+  heldFrom: timestamp("held_from", { withTimezone: true }),
+  releaseEligibleDate: timestamp("release_eligible_date", { withTimezone: true }),
+  releasedAt: timestamp("released_at", { withTimezone: true }),
+  status: varchar("status", { length: 20 }).notNull().default("PENDING"), // PENDING | POSTED | HELD | RELEASED
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+// Surety documents (GIA, collateral agreements, trust resolutions)
+export const suretyDocuments = pgTable("surety_documents", {
+  id: serial("id").primaryKey(),
+  caseId: integer("case_id").notNull().references(() => suretyCases.id, { onDelete: "cascade" }),
+  docType: varchar("doc_type", { length: 50 }).notNull(), // GIA | COLLATERAL_AGREEMENT | TRUST_RESOLUTION | OTHER
+  storagePath: varchar("storage_path", { length: 1000 }).notNull(),
+  signatureStatus: varchar("signature_status", { length: 20 }).notNull().default("PENDING"),
+  signedAt: timestamp("signed_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
@@ -329,6 +413,50 @@ export const underwritingPartiesRelations = relations(underwritingParties, ({ on
   }),
 }));
 
+// Surety relations
+export const suretyTrustsRelations = relations(suretyTrusts, ({ many }) => ({
+  cases: many(suretyCases),
+}));
+
+export const suretyCasesRelations = relations(suretyCases, ({ one, many }) => ({
+  bond: one(bonds, {
+    fields: [suretyCases.bondId],
+    references: [bonds.id],
+  }),
+  trust: one(suretyTrusts, {
+    fields: [suretyCases.suretyTrustId],
+    references: [suretyTrusts.id],
+  }),
+  underwriter: one(users, {
+    fields: [suretyCases.underwriterUserId],
+    references: [users.id],
+  }),
+  indemnitors: many(suretyIndemnitors),
+  collaterals: many(suretyCollateral),
+  documents: many(suretyDocuments),
+}));
+
+export const suretyIndemnitorsRelations = relations(suretyIndemnitors, ({ one }) => ({
+  case: one(suretyCases, {
+    fields: [suretyIndemnitors.caseId],
+    references: [suretyCases.id],
+  }),
+}));
+
+export const suretyCollateralRelations = relations(suretyCollateral, ({ one }) => ({
+  case: one(suretyCases, {
+    fields: [suretyCollateral.caseId],
+    references: [suretyCases.id],
+  }),
+}));
+
+export const suretyDocumentsRelations = relations(suretyDocuments, ({ one }) => ({
+  case: one(suretyCases, {
+    fields: [suretyDocuments.caseId],
+    references: [suretyCases.id],
+  }),
+}));
+
 // Insert schemas and types
 export const insertUserSchema = createInsertSchema(users).omit({
   id: true,
@@ -434,6 +562,34 @@ export const insertUnderwritingPartySchema = createInsertSchema(underwritingPart
   createdAt: true,
 });
 
+// Surety insert schemas
+export const insertSuretyTrustSchema = createInsertSchema(suretyTrusts).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertSuretyCaseSchema = createInsertSchema(suretyCases).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertSuretyIndemnitorSchema = createInsertSchema(suretyIndemnitors).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertSuretyCollateralSchema = createInsertSchema(suretyCollateral).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertSuretyDocumentSchema = createInsertSchema(suretyDocuments).omit({
+  id: true,
+  createdAt: true,
+});
+
 // ===== REAL DATA VALIDATION SCHEMAS =====
 // These schemas enforce the "real data only" policy by requiring critical fields
 // and rejecting requests with incomplete data instead of allowing null/undefined values.
@@ -514,6 +670,34 @@ export type InsertUnderwritingCase = z.infer<typeof insertUnderwritingCaseSchema
 
 export type UnderwritingParty = typeof underwritingParties.$inferSelect;
 export type InsertUnderwritingParty = z.infer<typeof insertUnderwritingPartySchema>;
+
+// Surety types
+export type SuretyTrust = typeof suretyTrusts.$inferSelect;
+export type InsertSuretyTrust = z.infer<typeof insertSuretyTrustSchema>;
+
+export type SuretyCase = typeof suretyCases.$inferSelect;
+export type InsertSuretyCase = z.infer<typeof insertSuretyCaseSchema>;
+
+export type SuretyIndemnitor = typeof suretyIndemnitors.$inferSelect;
+export type InsertSuretyIndemnitor = z.infer<typeof insertSuretyIndemnitorSchema>;
+
+export type SuretyCollateral = typeof suretyCollateral.$inferSelect;
+export type InsertSuretyCollateral = z.infer<typeof insertSuretyCollateralSchema>;
+
+export type SuretyDocument = typeof suretyDocuments.$inferSelect;
+export type InsertSuretyDocument = z.infer<typeof insertSuretyDocumentSchema>;
+
+export type SuretyCaseStatus = 
+  | "DRAFT" 
+  | "IN_REVIEW" 
+  | "APPROVED" 
+  | "DECLINED" 
+  | "APPROVED_WITH_COLLATERAL" 
+  | "DOCS_PENDING_SIGNATURE" 
+  | "ACTIVE" 
+  | "RELEASED";
+
+export type SuretyUnderwritingDecision = "DECLINED" | "APPROVED" | "APPROVED_WITH_COLLATERAL";
 
 // Additional types for API responses
 export type PricingScenario = {
