@@ -15,6 +15,9 @@ import BundlesPage from "@/pages/bundles";
 import BondsPage from "@/pages/bonds";
 import InvestorDashboardPage from "@/pages/investor-dashboard";
 import UnderwritingPage from "@/pages/underwriting";
+import InvestorOverviewPage from "@/pages/investor-overview";
+import InvestorExchangePage from "@/pages/investor-exchange";
+import InvestorMyBidsPage from "@/pages/investor-my-bids";
 import AdminLoginPage from "@/pages/admin-login";
 import AdminPanelPage from "@/pages/admin-panel";
 import NotFound from "@/pages/not-found";
@@ -78,6 +81,9 @@ function Router() {
         <Route path="/bonds" component={BondsPage} />
         <Route path="/underwriting" component={UnderwritingPage} />
         <Route path="/investor" component={InvestorDashboardPage} />
+        <Route path="/exchange/overview" component={InvestorOverviewPage} />
+        <Route path="/exchange/auctions" component={InvestorExchangePage} />
+        <Route path="/exchange/my-bids" component={InvestorMyBidsPage} />
         <Route component={NotFound} />
       </Switch>
     </AuthenticatedLayout>

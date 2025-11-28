@@ -10,6 +10,9 @@ import { summarizeBondDocumentFromFile } from "./services/bondDocumentAiService"
 import { getTrendingTopics, refreshTrendingTopics } from "./services/trendingService";
 import { extractBondDataFromDocument } from "./services/bondExtractionService";
 import { computeUnderwritingMetrics, generateUnderwritingNarrative } from "./services/underwritingService";
+import { getInvestorOverview, handleBondPerfected, closeExpiredAuctions } from "./services/bondPerfectionService";
+import { auctions, auctionBids } from "@shared/schema";
+import { eq, desc, and, lt, gt } from "drizzle-orm";
 import bcrypt from "bcryptjs";
 import { z } from "zod";
 import { sql } from "drizzle-orm";
@@ -1267,6 +1270,263 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Create underwriting case error:", error);
       res.status(500).json({ error: "Failed to create underwriting case" });
+    }
+  });
+
+  // ===== INVESTOR EXCHANGE ROUTES =====
+  // Middleware to require investor role
+  const investorAuthMiddleware = (req: AuthRequest, res: any, next: any) => {
+    try {
+      const authHeader = req.headers.authorization;
+      if (!authHeader?.startsWith("Bearer ")) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+
+      const token = authHeader.substring(7);
+      const decoded = verifyToken(token);
+      
+      if (!decoded) {
+        return res.status(401).json({ error: "Invalid token" });
+      }
+      
+      if (decoded.role !== "investor" && decoded.role !== "admin") {
+        return res.status(403).json({ error: "Forbidden - Investor access required" });
+      }
+
+      req.user = decoded;
+      next();
+    } catch (error: any) {
+      console.error("Investor auth error:", error.message);
+      res.status(401).json({ error: "Invalid token" });
+    }
+  };
+
+  // GET /api/investor/overview - Aggregated bond totals for investors
+  app.get("/api/investor/overview", investorAuthMiddleware, async (_req: AuthRequest, res) => {
+    try {
+      const totals = await getInvestorOverview();
+      res.json({ totals });
+    } catch (error) {
+      console.error("Get investor overview error:", error);
+      res.status(500).json({ error: "Failed to get investor overview" });
+    }
+  });
+
+  // GET /api/investor/auctions - List active auctions
+  app.get("/api/investor/auctions", investorAuthMiddleware, async (_req: AuthRequest, res) => {
+    try {
+      const now = new Date();
+
+      const rows = await db
+        .select({
+          id: auctions.id,
+          status: auctions.status,
+          startsAt: auctions.startsAt,
+          endsAt: auctions.endsAt,
+          reservePrice: auctions.reservePrice,
+        })
+        .from(auctions)
+        .where(
+          and(
+            eq(auctions.status, "ACTIVE"),
+            lt(auctions.startsAt, now),
+            gt(auctions.endsAt, now)
+          )
+        );
+
+      res.json({ auctions: rows });
+    } catch (error) {
+      console.error("Get investor auctions error:", error);
+      res.status(500).json({ error: "Failed to get auctions" });
+    }
+  });
+
+  // GET /api/investor/auctions/:id - Get auction details with highest bid
+  app.get("/api/investor/auctions/:id", investorAuthMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const auctionId = parseInt(req.params.id);
+      if (isNaN(auctionId)) {
+        return res.status(400).json({ error: "Invalid auction ID" });
+      }
+
+      const [auction] = await db
+        .select()
+        .from(auctions)
+        .where(eq(auctions.id, auctionId));
+
+      if (!auction) {
+        return res.status(404).json({ error: "Auction not found" });
+      }
+
+      const [highestBid] = await db
+        .select()
+        .from(auctionBids)
+        .where(eq(auctionBids.auctionId, auction.id))
+        .orderBy(desc(auctionBids.amount))
+        .limit(1);
+
+      res.json({
+        auction: {
+          id: auction.id,
+          status: auction.status,
+          startsAt: auction.startsAt,
+          endsAt: auction.endsAt,
+          reservePrice: auction.reservePrice,
+          highestBid: highestBid ? highestBid.amount : null,
+        },
+      });
+    } catch (error) {
+      console.error("Get auction details error:", error);
+      res.status(500).json({ error: "Failed to get auction details" });
+    }
+  });
+
+  // POST /api/investor/auctions/:id/bids - Place a bid on an auction
+  const placeBidSchema = z.object({
+    amount: z.number().positive("Bid amount must be positive"),
+  });
+
+  app.post("/api/investor/auctions/:id/bids", investorAuthMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const investorId = req.user!.id;
+      const auctionId = parseInt(req.params.id);
+      
+      if (isNaN(auctionId)) {
+        return res.status(400).json({ error: "Invalid auction ID" });
+      }
+
+      const validation = placeBidSchema.safeParse(req.body);
+      if (!validation.success) {
+        return res.status(400).json({ error: "Bid amount must be a positive number" });
+      }
+
+      const { amount } = validation.data;
+
+      const [auction] = await db
+        .select()
+        .from(auctions)
+        .where(eq(auctions.id, auctionId));
+
+      if (!auction) {
+        return res.status(404).json({ error: "Auction not found" });
+      }
+
+      const now = new Date();
+      if (
+        auction.status !== "ACTIVE" ||
+        now < auction.startsAt ||
+        now > auction.endsAt
+      ) {
+        return res.status(400).json({ error: "Auction is not open for bidding" });
+      }
+
+      const [highestBid] = await db
+        .select()
+        .from(auctionBids)
+        .where(eq(auctionBids.auctionId, auction.id))
+        .orderBy(desc(auctionBids.amount))
+        .limit(1);
+
+      const currentHighest = highestBid ? Number(highestBid.amount) : 0;
+      const minBid = currentHighest + 1;
+
+      if (amount < minBid) {
+        return res.status(400).json({
+          error: `Bid must be at least ${minBid}`,
+          currentHighest,
+        });
+      }
+
+      const [bid] = await db
+        .insert(auctionBids)
+        .values({
+          auctionId: auction.id,
+          investorId,
+          amount: amount.toString(),
+        })
+        .returning();
+
+      const reservePrice = Number(auction.reservePrice);
+      const reserveMet = amount >= reservePrice;
+
+      if (reserveMet) {
+        await db
+          .update(auctions)
+          .set({
+            status: "COMPLETED",
+            winningBidId: bid.id,
+            updatedAt: new Date(),
+          })
+          .where(eq(auctions.id, auction.id));
+
+        return res.json({
+          bid,
+          message: "Reserve met. Auction completed. You are the winning bidder.",
+        });
+      }
+
+      res.json({
+        bid,
+        message: "Bid placed successfully.",
+      });
+    } catch (error) {
+      console.error("Place bid error:", error);
+      res.status(500).json({ error: "Failed to place bid" });
+    }
+  });
+
+  // GET /api/investor/my-bids - List bids for the logged-in investor
+  app.get("/api/investor/my-bids", investorAuthMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const investorId = req.user!.id;
+
+      const rows = await db
+        .select({
+          id: auctionBids.id,
+          auctionId: auctionBids.auctionId,
+          amount: auctionBids.amount,
+          placedAt: auctionBids.placedAt,
+        })
+        .from(auctionBids)
+        .where(eq(auctionBids.investorId, investorId));
+
+      res.json({ bids: rows });
+    } catch (error) {
+      console.error("Get my bids error:", error);
+      res.status(500).json({ error: "Failed to get bids" });
+    }
+  });
+
+  // POST /api/admin/bonds/:id/perfect - Admin endpoint to perfect a bond and create auction
+  app.post("/api/admin/bonds/:id/perfect", adminAuthMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const bondId = parseInt(req.params.id);
+      if (isNaN(bondId)) {
+        return res.status(400).json({ error: "Invalid bond ID" });
+      }
+
+      const { reservePrice, auctionDurationDays } = req.body;
+      
+      if (!reservePrice || typeof reservePrice !== "number" || reservePrice <= 0) {
+        return res.status(400).json({ error: "Reserve price must be a positive number" });
+      }
+
+      const auction = await handleBondPerfected(bondId, reservePrice, auctionDurationDays);
+      res.json({ auction, message: "Bond perfected and auction created" });
+    } catch (error: any) {
+      console.error("Perfect bond error:", error);
+      res.status(500).json({ error: error.message || "Failed to perfect bond" });
+    }
+  });
+
+  // POST /api/admin/auctions/close-expired - Admin endpoint to close expired auctions
+  app.post("/api/admin/auctions/close-expired", adminAuthMiddleware, async (_req: AuthRequest, res) => {
+    try {
+      const closedCount = await closeExpiredAuctions();
+      res.json({ closedCount, message: `Closed ${closedCount} expired auctions` });
+    } catch (error) {
+      console.error("Close expired auctions error:", error);
+      res.status(500).json({ error: "Failed to close expired auctions" });
     }
   });
 

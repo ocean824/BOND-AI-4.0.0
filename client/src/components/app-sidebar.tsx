@@ -1,4 +1,4 @@
-import { Home, FileText, Package, Coins, TrendingUp, Shield, MessageCircle, LogOut } from "lucide-react";
+import { Home, FileText, Package, Coins, TrendingUp, Shield, Gavel, History, BarChart3, LogOut } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import {
   Sidebar,
@@ -14,18 +14,40 @@ import {
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/lib/auth";
 
-const menuItems = [
+type MenuItem = {
+  title: string;
+  url: string;
+  icon: any;
+  testId: string;
+  roles?: string[];
+};
+
+const mainMenuItems: MenuItem[] = [
   { title: "Dashboard", url: "/", icon: Home, testId: "nav-dashboard" },
-  { title: "Judgments", url: "/judgments", icon: FileText, testId: "nav-judgments" },
-  { title: "Bundles", url: "/bundles", icon: Package, testId: "nav-bundles" },
-  { title: "Bonds", url: "/bonds", icon: Coins, testId: "nav-bonds" },
-  { title: "Underwriting", url: "/underwriting", icon: Shield, testId: "nav-underwriting" },
-  { title: "Investor Metrics", url: "/investor", icon: TrendingUp, testId: "nav-investor" },
+  { title: "Judgments", url: "/judgments", icon: FileText, testId: "nav-judgments", roles: ["admin", "analyst"] },
+  { title: "Bundles", url: "/bundles", icon: Package, testId: "nav-bundles", roles: ["admin", "analyst"] },
+  { title: "Bonds", url: "/bonds", icon: Coins, testId: "nav-bonds", roles: ["admin", "analyst"] },
+  { title: "Underwriting", url: "/underwriting", icon: Shield, testId: "nav-underwriting", roles: ["admin", "analyst"] },
+  { title: "Investor Metrics", url: "/investor", icon: TrendingUp, testId: "nav-investor", roles: ["admin", "analyst"] },
+];
+
+const exchangeMenuItems: MenuItem[] = [
+  { title: "Exchange Overview", url: "/exchange/overview", icon: BarChart3, testId: "nav-exchange-overview", roles: ["admin", "investor"] },
+  { title: "Active Auctions", url: "/exchange/auctions", icon: Gavel, testId: "nav-exchange-auctions", roles: ["admin", "investor"] },
+  { title: "My Bids", url: "/exchange/my-bids", icon: History, testId: "nav-exchange-my-bids", roles: ["admin", "investor"] },
 ];
 
 export function AppSidebar() {
   const [location] = useLocation();
   const { user, logout } = useAuth();
+
+  const userRole = user?.role || "analyst";
+  
+  const filterByRole = (items: MenuItem[]) => 
+    items.filter(item => !item.roles || item.roles.includes(userRole));
+
+  const visibleMainItems = filterByRole(mainMenuItems);
+  const visibleExchangeItems = filterByRole(exchangeMenuItems);
 
   return (
     <Sidebar>
@@ -36,7 +58,7 @@ export function AppSidebar() {
           </SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
-              {menuItems.map((item) => (
+              {visibleMainItems.map((item) => (
                 <SidebarMenuItem key={item.title}>
                   <SidebarMenuButton asChild isActive={location === item.url}>
                     <Link href={item.url} data-testid={item.testId}>
@@ -49,6 +71,26 @@ export function AppSidebar() {
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
+
+        {visibleExchangeItems.length > 0 && (
+          <SidebarGroup>
+            <SidebarGroupLabel className="px-2">Bond Exchange</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                {visibleExchangeItems.map((item) => (
+                  <SidebarMenuItem key={item.title}>
+                    <SidebarMenuButton asChild isActive={location === item.url}>
+                      <Link href={item.url} data-testid={item.testId}>
+                        <item.icon className="w-4 h-4" />
+                        <span>{item.title}</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                ))}
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        )}
       </SidebarContent>
       
       <SidebarFooter className="p-4 border-t">

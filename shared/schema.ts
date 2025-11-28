@@ -91,9 +91,36 @@ export const bonds = pgTable("bonds", {
   bondScore: integer("bond_score"),
   riskTier: varchar("risk_tier", { length: 20 }),
   
+  // Exchange/perfection fields
+  isPerfected: boolean("is_perfected").notNull().default(false),
+  perfectedAt: timestamp("perfected_at", { withTimezone: true }),
+  expectedPerfectedAt: timestamp("expected_perfected_at", { withTimezone: true }),
+  currentAuctionId: integer("current_auction_id"),
+  
   status: varchar("status", { length: 50 }).notNull().default("draft"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+// Auction status types: PENDING | ACTIVE | RESERVE_MET | COMPLETED | CANCELLED | EXPIRED
+export const auctions = pgTable("auctions", {
+  id: serial("id").primaryKey(),
+  bondId: integer("bond_id").notNull().references(() => bonds.id, { onDelete: "cascade" }),
+  status: varchar("status", { length: 20 }).notNull().default("PENDING"),
+  startsAt: timestamp("starts_at", { withTimezone: true }).notNull(),
+  endsAt: timestamp("ends_at", { withTimezone: true }).notNull(),
+  reservePrice: decimal("reserve_price", { precision: 18, scale: 2 }).notNull(),
+  winningBidId: integer("winning_bid_id"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const auctionBids = pgTable("auction_bids", {
+  id: serial("id").primaryKey(),
+  auctionId: integer("auction_id").notNull().references(() => auctions.id, { onDelete: "cascade" }),
+  investorId: integer("investor_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  amount: decimal("amount", { precision: 18, scale: 2 }).notNull(),
+  placedAt: timestamp("placed_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
 export const bondDocuments = pgTable("bond_documents", {
@@ -243,6 +270,26 @@ export const bondsRelations = relations(bonds, ({ one, many }) => ({
     references: [users.id],
   }),
   documents: many(bondDocuments),
+  auctions: many(auctions),
+}));
+
+export const auctionsRelations = relations(auctions, ({ one, many }) => ({
+  bond: one(bonds, {
+    fields: [auctions.bondId],
+    references: [bonds.id],
+  }),
+  bids: many(auctionBids),
+}));
+
+export const auctionBidsRelations = relations(auctionBids, ({ one }) => ({
+  auction: one(auctions, {
+    fields: [auctionBids.auctionId],
+    references: [auctions.id],
+  }),
+  investor: one(users, {
+    fields: [auctionBids.investorId],
+    references: [users.id],
+  }),
 }));
 
 export const bondDocumentsRelations = relations(bondDocuments, ({ one }) => ({
@@ -355,6 +402,17 @@ export const insertBondDocumentSchema = createInsertSchema(bondDocuments).omit({
   createdAt: true,
 });
 
+export const insertAuctionSchema = createInsertSchema(auctions).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertAuctionBidSchema = createInsertSchema(auctionBids).omit({
+  id: true,
+  placedAt: true,
+});
+
 export const insertTrendingTopicSchema = createInsertSchema(trendingTopics).omit({
   id: true,
   fetchedAt: true,
@@ -436,6 +494,14 @@ export type InsertBond = z.infer<typeof insertBondSchema>;
 
 export type BondDocument = typeof bondDocuments.$inferSelect;
 export type InsertBondDocument = z.infer<typeof insertBondDocumentSchema>;
+
+export type Auction = typeof auctions.$inferSelect;
+export type InsertAuction = z.infer<typeof insertAuctionSchema>;
+
+export type AuctionBid = typeof auctionBids.$inferSelect;
+export type InsertAuctionBid = z.infer<typeof insertAuctionBidSchema>;
+
+export type AuctionStatus = "PENDING" | "ACTIVE" | "RESERVE_MET" | "COMPLETED" | "CANCELLED" | "EXPIRED";
 
 export type TrendingTopic = typeof trendingTopics.$inferSelect;
 export type InsertTrendingTopic = z.infer<typeof insertTrendingTopicSchema>;
