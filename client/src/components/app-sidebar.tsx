@@ -1,4 +1,4 @@
-import { Home, FileText, Package, Coins, TrendingUp, Shield, Gavel, History, BarChart3, LogOut } from "lucide-react";
+import { Home, FileText, Package, Coins, TrendingUp, Shield, Gavel, History, BarChart3, LogOut, Scale } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import {
   Sidebar,
@@ -28,6 +28,7 @@ const mainMenuItems: MenuItem[] = [
   { title: "Bundles", url: "/bundles", icon: Package, testId: "nav-bundles", roles: ["admin", "analyst"] },
   { title: "Bonds", url: "/bonds", icon: Coins, testId: "nav-bonds", roles: ["admin", "analyst"] },
   { title: "Underwriting", url: "/underwriting", icon: Shield, testId: "nav-underwriting", roles: ["admin", "analyst"] },
+  { title: "Surety System", url: "/surety", icon: Scale, testId: "nav-surety", roles: ["admin"] },
   { title: "Investor Metrics", url: "/investor", icon: TrendingUp, testId: "nav-investor", roles: ["admin", "analyst"] },
 ];
 

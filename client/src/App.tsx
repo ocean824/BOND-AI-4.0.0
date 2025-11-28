@@ -20,6 +20,7 @@ import InvestorExchangePage from "@/pages/investor-exchange";
 import InvestorMyBidsPage from "@/pages/investor-my-bids";
 import AdminLoginPage from "@/pages/admin-login";
 import AdminPanelPage from "@/pages/admin-panel";
+import SuretyDashboardPage from "@/pages/surety-dashboard";
 import NotFound from "@/pages/not-found";
 
 function AuthenticatedLayout({ children }: { children: React.ReactNode }) {
@@ -80,6 +81,7 @@ function Router() {
         <Route path="/bundles" component={BundlesPage} />
         <Route path="/bonds" component={BondsPage} />
         <Route path="/underwriting" component={UnderwritingPage} />
+        <Route path="/surety" component={SuretyDashboardPage} />
         <Route path="/investor" component={InvestorDashboardPage} />
         <Route path="/exchange/overview" component={InvestorOverviewPage} />
         <Route path="/exchange/auctions" component={InvestorExchangePage} />
