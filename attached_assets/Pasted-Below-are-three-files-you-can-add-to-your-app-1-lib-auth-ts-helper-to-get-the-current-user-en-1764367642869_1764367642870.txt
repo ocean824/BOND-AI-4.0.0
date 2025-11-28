@@ -1,0 +1,312 @@
+Below are three files you can add to your app:
+1.	lib/auth.ts – helper to get the current user + enforce ADMIN.
+2.	lib/documentEngine.ts – the documentEngine we designed, adapted for Next.
+3.	app/api/admin/bonds/[bondId]/generate-docs/route.ts – the Next.js API route.
+You can tweak imports (@/lib/...) to match your project, but the structure is ready to paste.
+________________________________________
+1) lib/auth.ts – auth + ADMIN-only helper
+Adapt this to your real auth (NextAuth, JWT, custom, etc.). The important part is that it returns a user with a role field and rejects non-admins.
+// lib/auth.ts
+import { NextRequest } from "next/server";
+
+export type AppRole = "ADMIN" | "UNDERWRITER" | "INTERNAL" | "INVESTOR";
+
+export interface AuthUser {
+  id: string;
+  email: string;
+  role: AppRole;
+}
+
+// 🔧 TODO: Replace with your real auth integration (NextAuth, custom JWT, etc.)
+export async function getAuthUser(req: NextRequest): Promise<AuthUser | null> {
+  // Example pseudo-code if you use a JWT cookie:
+  // const token = req.cookies.get("auth_token")?.value;
+  // if (!token) return null;
+  // const payload = verifyJwt(token);
+  // return { id: payload.sub, email: payload.email, role: payload.role as AppRole };
+
+  return null; // <- until you wire it to your real system
+}
+
+/**
+ * Ensure the request comes from an ADMIN.
+ * Throws a Response (NextResponse.json) if not.
+ */
+export async function requireAdminUser(req: NextRequest): Promise<AuthUser> {
+  const user = await getAuthUser(req);
+
+  if (!user) {
+    throw new Response(
+      JSON.stringify({ error: "Unauthorized" }),
+      { status: 401, headers: { "Content-Type": "application/json" } },
+    );
+  }
+
+  if (user.role !== "ADMIN") {
+    throw new Response(
+      JSON.stringify({ error: "Admin access required" }),
+      { status: 403, headers: { "Content-Type": "application/json" } },
+    );
+  }
+
+  return user;
+}
+If you already have something like getServerSession, you can just wrap that inside getAuthUser.
+________________________________________
+2) lib/documentEngine.ts – central document engine
+This is the same logic we discussed before, just packaged for Next + TypeScript. It does not assume any specific PDF generator; you can plug your own where the comments are.
+// lib/documentEngine.ts
+
+export type BondProcessStep =
+  | "JUDGMENT_TO_BOND"
+  | "PERFECTION"
+  | "SURETY_UNDERWRITING"
+  | "SURETY_ACTIVATION"
+  | "EXCHANGE_LISTING"
+  | "EXCHANGE_SALE"
+  | "TRUST_ALLOCATION";
+
+export type DocType =
+  | "BOND_TERM_SHEET"
+  | "BOND_INSTRUMENT"
+  | "PERFECTION_CERT"
+  | "GIA"
+  | "COLLATERAL_AGREEMENT"
+  | "SURETY_TRUST_RESOLUTION"
+  | "UNDERWRITING_REPORT"
+  | "EXCHANGE_OFFERING_SHEET"
+  | "INVESTOR_SUBSCRIPTION"
+  | "TRADE_CONFIRMATION"
+  | "TRUST_BOARD_MINUTES"
+  | "TRUST_ALLOCATION_RESOLUTION";
+
+export interface GenerateDocsInput {
+  bondId: string;
+  step: BondProcessStep;
+  suretyCaseId?: string;
+  trustId?: string;
+}
+
+export interface GeneratedDoc {
+  id: string;
+  docType: DocType;
+  storagePath: string;
+}
+
+/**
+ * Core document engine. For the given bond + lifecycle step, it decides
+ * which docs to generate, and returns their metadata.
+ *
+ * You plug in your real template/PDF/e-sign logic where the TODOs are.
+ */
+export async function generateDocsForBondStep(
+  input: GenerateDocsInput,
+): Promise<GeneratedDoc[]> {
+  const { bondId, step, suretyCaseId, trustId } = input;
+
+  // 🔎 TODO: Pull the real data you need for your templates here via Drizzle:
+  // const bond = await db.query.bonds.findFirst({ where: eq(bonds.id, bondId) });
+  // const suretyCase = suretyCaseId ? await db.query.suretyCases.findFirst(...) : null;
+  // const trust = trustId ? await db.query.suretyTrusts.findFirst(...) : null;
+
+  const docsToCreate: DocType[] = [];
+
+  switch (step) {
+    case "JUDGMENT_TO_BOND":
+      docsToCreate.push("BOND_TERM_SHEET", "BOND_INSTRUMENT");
+      break;
+
+    case "PERFECTION":
+      docsToCreate.push("PERFECTION_CERT");
+      break;
+
+    case "SURETY_UNDERWRITING":
+      docsToCreate.push("UNDERWRITING_REPORT");
+      break;
+
+    case "SURETY_ACTIVATION":
+      docsToCreate.push("GIA", "COLLATERAL_AGREEMENT", "SURETY_TRUST_RESOLUTION");
+      break;
+
+    case "EXCHANGE_LISTING":
+      docsToCreate.push("EXCHANGE_OFFERING_SHEET");
+      break;
+
+    case "EXCHANGE_SALE":
+      docsToCreate.push("INVESTOR_SUBSCRIPTION", "TRADE_CONFIRMATION");
+      break;
+
+    case "TRUST_ALLOCATION":
+      docsToCreate.push("TRUST_BOARD_MINUTES", "TRUST_ALLOCATION_RESOLUTION");
+      break;
+
+    default:
+      throw new Error(`Unsupported bond process step: ${step}`);
+  }
+
+  const generated: GeneratedDoc[] = [];
+
+  for (const docType of docsToCreate) {
+    // 💡 Build a unique path per doc; in production you’d likely use S3, etc.
+    const fileName = `${docType}_${Date.now()}.pdf`;
+    const storagePath = `/docs/${bondId}/${fileName}`;
+
+    // 🔧 TODO: Generate the actual file here:
+    // 1) Build template context from bond/surety/trust.
+    // 2) Render to PDF/DOCX.
+    // 3) Save to disk/S3/Blob storage.
+    //
+    // Example (pseudo):
+    // await renderTemplateToPdf({
+    //   template: docType,
+    //   context: { bond, suretyCase, trust },
+    //   outputPath: storagePath,
+    // });
+
+    // 🔧 TODO: Persist metadata into your DB if you have a documents table.
+    // await db.insert(bondDocuments).values({
+    //   bondId,
+    //   suretyCaseId: suretyCaseId ?? null,
+    //   trustId: trustId ?? null,
+    //   docType,
+    //   storagePath,
+    //   status: "DRAFT",
+    // });
+
+    generated.push({
+      id: crypto.randomUUID(),
+      docType,
+      storagePath,
+    });
+  }
+
+  return generated;
+}
+You can extend this to accept options like “only generate if not already exists”, but this is the clean base version.
+________________________________________
+3) Next.js API route – /app/api/admin/bonds/[bondId]/generate-docs/route.ts
+This is the route you asked for. It:
+•	Accepts POST only.
+•	Checks that the caller is ADMIN using requireAdminUser.
+•	Reads { step, suretyCaseId, trustId } from the JSON body.
+•	Calls generateDocsForBondStep(...).
+•	Returns the generated docs as JSON.
+// app/api/admin/bonds/[bondId]/generate-docs/route.ts
+import { NextRequest, NextResponse } from "next/server";
+import { requireAdminUser } from "@/lib/auth";
+import {
+  generateDocsForBondStep,
+  type BondProcessStep,
+} from "@/lib/documentEngine";
+
+// Optional: tighten allowed steps at runtime:
+const ALLOWED_STEPS: BondProcessStep[] = [
+  "JUDGMENT_TO_BOND",
+  "PERFECTION",
+  "SURETY_UNDERWRITING",
+  "SURETY_ACTIVATION",
+  "EXCHANGE_LISTING",
+  "EXCHANGE_SALE",
+  "TRUST_ALLOCATION",
+];
+
+export async function POST(
+  req: NextRequest,
+  context: { params: { bondId: string } },
+) {
+  try:
+    // 🔐 Admin-only: throws Response if not authorized
+    await requireAdminUser(req);
+
+    const bondId = context.params.bondId;
+    const body = await req.json();
+
+    const { step, suretyCaseId, trustId } = body as {
+      step: BondProcessStep | string;
+      suretyCaseId?: string;
+      trustId?: string;
+    };
+
+    if (!bondId) {
+      return NextResponse.json(
+        { error: "Missing bondId in route params" },
+        { status: 400 },
+      );
+    }
+
+    if (!step || !ALLOWED_STEPS.includes(step as BondProcessStep)) {
+      return NextResponse.json(
+        {
+          error:
+            "Invalid or missing step. Must be one of: " +
+            ALLOWED_STEPS.join(", "),
+        },
+        { status: 400 },
+      );
+    }
+
+    const docs = await generateDocsForBondStep({
+      bondId,
+      step: step as BondProcessStep,
+      suretyCaseId,
+      trustId,
+    });
+
+    return NextResponse.json({ docs }, { status: 200 });
+  } catch (err: any) {
+    // If requireAdminUser threw a Response, just re-throw it
+    if (err instanceof Response) {
+      throw err;
+    }
+
+    console.error("Doc generation error:", err);
+    return NextResponse.json(
+      { error: "Failed to generate documents" },
+      { status: 500 },
+    );
+  }
+}
+Investor lockout:
+Even if an INVESTOR hits this URL:
+•	requireAdminUser will reject them (401/403).
+So they get zero access to doc generation for any step of the pipeline.
+________________________________________
+4) How to call this from your Admin UI
+On the admin side (e.g. in a React component on your dashboard):
+// example in an Admin React component
+async function generateDocs(
+  bondId: string,
+  step: BondProcessStep,
+  options?: { suretyCaseId?: string; trustId?: string },
+) {
+  const res = await fetch(
+    `/api/admin/bonds/${bondId}/generate-docs`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        step,
+        suretyCaseId: options?.suretyCaseId,
+        trustId: options?.trustId,
+      }),
+    },
+  );
+
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error ?? "Doc generation failed");
+  }
+
+  const data = await res.json();
+  return data.docs as {
+    id: string;
+    docType: string;
+    storagePath: string;
+  }[];
+}
+Then your admin UI can have buttons like:
+•	“Generate Bond Docs” → generateDocs(bondId, "JUDGMENT_TO_BOND")
+•	“Generate Surety Package” → generateDocs(bondId, "SURETY_ACTIVATION", { suretyCaseId, trustId })
+•	etc.
+________________________________________
+

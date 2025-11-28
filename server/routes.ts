@@ -26,7 +26,13 @@ import {
   createSuretyTrust,
   updateSuretyTrust
 } from "./services/suretyUnderwritingService";
-import { auctions, auctionBids, suretyTrusts, suretyCases, suretyCollateral } from "@shared/schema";
+import {
+  generateDocsForBondStep,
+  getAvailableSteps,
+  ALLOWED_STEPS,
+  type BondProcessStep
+} from "./services/documentEngineService";
+import { auctions, auctionBids, suretyTrusts, suretyCases, suretyCollateral, bondProcessDocuments } from "@shared/schema";
 import { eq, desc, and, lt, gt } from "drizzle-orm";
 import bcrypt from "bcryptjs";
 import { z } from "zod";
@@ -1570,6 +1576,187 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error: any) {
       console.error("Perfect bond error:", error);
       res.status(500).json({ error: error.message || "Failed to perfect bond" });
+    }
+  });
+
+  // ===== DOCUMENT ENGINE - ADMIN ONLY =====
+  // These routes generate legal documents for every step of the bond process
+  // Only ADMIN users can generate documents
+
+  // GET /api/admin/docs/steps - Get available bond process steps and their document types
+  app.get("/api/admin/docs/steps", adminAuthMiddleware, async (_req: AuthRequest, res) => {
+    try {
+      const steps = getAvailableSteps();
+      res.json({ steps });
+    } catch (error) {
+      console.error("Get document steps error:", error);
+      res.status(500).json({ error: "Failed to get document steps" });
+    }
+  });
+
+  // POST /api/admin/bonds/:bondId/generate-docs - Generate documents for a bond at a specific process step
+  const generateDocsSchema = z.object({
+    step: z.enum(ALLOWED_STEPS as [string, ...string[]]),
+    suretyCaseId: z.number().optional(),
+    trustId: z.number().optional(),
+    auctionId: z.number().optional(),
+    investorId: z.number().optional(),
+  });
+
+  app.post("/api/admin/bonds/:bondId/generate-docs", adminAuthMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const bondId = parseInt(req.params.bondId);
+      if (isNaN(bondId)) {
+        return res.status(400).json({ error: "Invalid bond ID" });
+      }
+
+      const validation = generateDocsSchema.safeParse(req.body);
+      if (!validation.success) {
+        return res.status(400).json({ 
+          error: "Invalid request",
+          details: validation.error.errors,
+          allowedSteps: ALLOWED_STEPS
+        });
+      }
+
+      const { step, suretyCaseId, trustId, auctionId, investorId } = validation.data;
+
+      const docs = await generateDocsForBondStep({
+        bondId,
+        step: step as BondProcessStep,
+        suretyCaseId,
+        trustId,
+        auctionId,
+        investorId,
+      });
+
+      // Save document records to database
+      for (const doc of docs) {
+        await db.insert(bondProcessDocuments).values({
+          bondId,
+          generatedBy: req.user!.id,
+          processStep: step,
+          docType: doc.docType,
+          storagePath: doc.storagePath,
+          filename: doc.storagePath.split("/").pop() || doc.docType,
+          status: "DRAFT",
+          suretyCaseId,
+          suretyTrustId: trustId,
+          auctionId,
+          metadata: {},
+        });
+      }
+
+      res.json({ 
+        docs,
+        message: `Generated ${docs.length} document(s) for step: ${step}`
+      });
+    } catch (error: any) {
+      console.error("Generate documents error:", error);
+      res.status(500).json({ error: error.message || "Failed to generate documents" });
+    }
+  });
+
+  // GET /api/admin/bonds/:bondId/documents - Get all generated documents for a bond
+  app.get("/api/admin/bonds/:bondId/documents", adminAuthMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const bondId = parseInt(req.params.bondId);
+      if (isNaN(bondId)) {
+        return res.status(400).json({ error: "Invalid bond ID" });
+      }
+
+      const docs = await db
+        .select()
+        .from(bondProcessDocuments)
+        .where(eq(bondProcessDocuments.bondId, bondId))
+        .orderBy(desc(bondProcessDocuments.createdAt));
+
+      res.json({ documents: docs });
+    } catch (error) {
+      console.error("Get bond documents error:", error);
+      res.status(500).json({ error: "Failed to get bond documents" });
+    }
+  });
+
+  // GET /api/admin/bonds/:bondId/documents/:docId - Download a specific document
+  app.get("/api/admin/bonds/:bondId/documents/:docId", adminAuthMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const bondId = parseInt(req.params.bondId);
+      const docId = parseInt(req.params.docId);
+      
+      if (isNaN(bondId) || isNaN(docId)) {
+        return res.status(400).json({ error: "Invalid ID" });
+      }
+
+      const [doc] = await db
+        .select()
+        .from(bondProcessDocuments)
+        .where(
+          and(
+            eq(bondProcessDocuments.bondId, bondId),
+            eq(bondProcessDocuments.id, docId)
+          )
+        );
+
+      if (!doc) {
+        return res.status(404).json({ error: "Document not found" });
+      }
+
+      // Construct full file path
+      const filePath = path.join(process.cwd(), doc.storagePath.replace(/^\//, ""));
+      
+      // Check if file exists
+      try {
+        await fs.access(filePath);
+      } catch {
+        return res.status(404).json({ error: "Document file not found on disk" });
+      }
+
+      // Send the file
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `attachment; filename="${doc.filename}"`);
+      const fileStream = require("fs").createReadStream(filePath);
+      fileStream.pipe(res);
+    } catch (error) {
+      console.error("Download document error:", error);
+      res.status(500).json({ error: "Failed to download document" });
+    }
+  });
+
+  // PATCH /api/admin/bonds/:bondId/documents/:docId - Update document status
+  app.patch("/api/admin/bonds/:bondId/documents/:docId", adminAuthMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const bondId = parseInt(req.params.bondId);
+      const docId = parseInt(req.params.docId);
+      
+      if (isNaN(bondId) || isNaN(docId)) {
+        return res.status(400).json({ error: "Invalid ID" });
+      }
+
+      const { status } = req.body;
+      if (!["DRAFT", "FINAL", "SIGNED", "ARCHIVED"].includes(status)) {
+        return res.status(400).json({ error: "Invalid status. Must be DRAFT, FINAL, SIGNED, or ARCHIVED" });
+      }
+
+      const [updated] = await db
+        .update(bondProcessDocuments)
+        .set({ status })
+        .where(
+          and(
+            eq(bondProcessDocuments.bondId, bondId),
+            eq(bondProcessDocuments.id, docId)
+          )
+        )
+        .returning();
+
+      if (!updated) {
+        return res.status(404).json({ error: "Document not found" });
+      }
+
+      res.json({ document: updated });
+    } catch (error) {
+      console.error("Update document error:", error);
+      res.status(500).json({ error: "Failed to update document" });
     }
   });
 

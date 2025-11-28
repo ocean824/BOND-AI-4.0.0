@@ -282,6 +282,24 @@ export const suretyDocuments = pgTable("surety_documents", {
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
+// ===== DOCUMENT ENGINE - Bond Process Documents =====
+// Tracks all documents generated at each step of the bond lifecycle
+export const bondProcessDocuments = pgTable("bond_process_documents", {
+  id: serial("id").primaryKey(),
+  bondId: integer("bond_id").notNull().references(() => bonds.id, { onDelete: "cascade" }),
+  generatedBy: integer("generated_by").notNull().references(() => users.id),
+  processStep: varchar("process_step", { length: 50 }).notNull(), // JUDGMENT_TO_BOND | PERFECTION | SURETY_UNDERWRITING | SURETY_ACTIVATION | EXCHANGE_LISTING | EXCHANGE_SALE | TRUST_ALLOCATION
+  docType: varchar("doc_type", { length: 50 }).notNull(), // BOND_TERM_SHEET | BOND_INSTRUMENT | PERFECTION_CERT | GIA | etc.
+  storagePath: varchar("storage_path", { length: 1000 }).notNull(),
+  filename: varchar("filename", { length: 255 }).notNull(),
+  status: varchar("status", { length: 20 }).notNull().default("DRAFT"), // DRAFT | FINAL | SIGNED | ARCHIVED
+  suretyCaseId: integer("surety_case_id").references(() => suretyCases.id),
+  suretyTrustId: integer("surety_trust_id").references(() => suretyTrusts.id),
+  auctionId: integer("auction_id").references(() => auctions.id),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().default({}),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
 // Relations
 export const usersRelations = relations(users, ({ many }) => ({
   judgments: many(judgments),
@@ -457,6 +475,29 @@ export const suretyDocumentsRelations = relations(suretyDocuments, ({ one }) => 
   }),
 }));
 
+export const bondProcessDocumentsRelations = relations(bondProcessDocuments, ({ one }) => ({
+  bond: one(bonds, {
+    fields: [bondProcessDocuments.bondId],
+    references: [bonds.id],
+  }),
+  generatedByUser: one(users, {
+    fields: [bondProcessDocuments.generatedBy],
+    references: [users.id],
+  }),
+  suretyCase: one(suretyCases, {
+    fields: [bondProcessDocuments.suretyCaseId],
+    references: [suretyCases.id],
+  }),
+  suretyTrust: one(suretyTrusts, {
+    fields: [bondProcessDocuments.suretyTrustId],
+    references: [suretyTrusts.id],
+  }),
+  auction: one(auctions, {
+    fields: [bondProcessDocuments.auctionId],
+    references: [auctions.id],
+  }),
+}));
+
 // Insert schemas and types
 export const insertUserSchema = createInsertSchema(users).omit({
   id: true,
@@ -590,6 +631,11 @@ export const insertSuretyDocumentSchema = createInsertSchema(suretyDocuments).om
   createdAt: true,
 });
 
+export const insertBondProcessDocumentSchema = createInsertSchema(bondProcessDocuments).omit({
+  id: true,
+  createdAt: true,
+});
+
 // ===== REAL DATA VALIDATION SCHEMAS =====
 // These schemas enforce the "real data only" policy by requiring critical fields
 // and rejecting requests with incomplete data instead of allowing null/undefined values.
@@ -686,6 +732,32 @@ export type InsertSuretyCollateral = z.infer<typeof insertSuretyCollateralSchema
 
 export type SuretyDocument = typeof suretyDocuments.$inferSelect;
 export type InsertSuretyDocument = z.infer<typeof insertSuretyDocumentSchema>;
+
+export type BondProcessDocument = typeof bondProcessDocuments.$inferSelect;
+export type InsertBondProcessDocument = z.infer<typeof insertBondProcessDocumentSchema>;
+
+export type BondProcessStep = 
+  | "JUDGMENT_TO_BOND"
+  | "PERFECTION"
+  | "SURETY_UNDERWRITING"
+  | "SURETY_ACTIVATION"
+  | "EXCHANGE_LISTING"
+  | "EXCHANGE_SALE"
+  | "TRUST_ALLOCATION";
+
+export type BondDocType =
+  | "BOND_TERM_SHEET"
+  | "BOND_INSTRUMENT"
+  | "PERFECTION_CERT"
+  | "GIA"
+  | "COLLATERAL_AGREEMENT"
+  | "SURETY_TRUST_RESOLUTION"
+  | "UNDERWRITING_REPORT"
+  | "EXCHANGE_OFFERING_SHEET"
+  | "INVESTOR_SUBSCRIPTION"
+  | "TRADE_CONFIRMATION"
+  | "TRUST_BOARD_MINUTES"
+  | "TRUST_ALLOCATION_RESOLUTION";
 
 export type SuretyCaseStatus = 
   | "DRAFT" 

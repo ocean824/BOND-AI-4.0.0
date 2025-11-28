@@ -67,6 +67,56 @@ type BondExtractionResult = {
   warnings: string[];
 };
 
+type ProcessStep = {
+  step: string;
+  label: string;
+  docTypes: string[];
+};
+
+type GeneratedDoc = {
+  id: string;
+  docType: string;
+  label: string;
+  storagePath: string;
+  generatedAt: string;
+};
+
+type BondProcessDoc = {
+  id: number;
+  bondId: number;
+  processStep: string;
+  docType: string;
+  filename: string;
+  storagePath: string;
+  status: string;
+  createdAt: string;
+};
+
+const DOC_TYPE_LABELS: Record<string, string> = {
+  BOND_TERM_SHEET: "Bond Term Sheet",
+  BOND_INSTRUMENT: "Bond Instrument",
+  PERFECTION_CERT: "Perfection Certificate",
+  GIA: "General Indemnity Agreement",
+  COLLATERAL_AGREEMENT: "Collateral Agreement",
+  SURETY_TRUST_RESOLUTION: "Surety Trust Resolution",
+  UNDERWRITING_REPORT: "Underwriting Report",
+  EXCHANGE_OFFERING_SHEET: "Exchange Offering Sheet",
+  INVESTOR_SUBSCRIPTION: "Investor Subscription Agreement",
+  TRADE_CONFIRMATION: "Trade Confirmation",
+  TRUST_BOARD_MINUTES: "Trust Board Minutes",
+  TRUST_ALLOCATION_RESOLUTION: "Trust Allocation Resolution",
+};
+
+const STEP_LABELS: Record<string, string> = {
+  JUDGMENT_TO_BOND: "Judgment to Bond",
+  PERFECTION: "Perfection",
+  SURETY_UNDERWRITING: "Surety Underwriting",
+  SURETY_ACTIVATION: "Surety Activation",
+  EXCHANGE_LISTING: "Exchange Listing",
+  EXCHANGE_SALE: "Exchange Sale",
+  TRUST_ALLOCATION: "Trust Allocation",
+};
+
 function getRiskTierClasses(tier: Bond["riskTier"]): string {
   if (!tier) return "bg-slate-100 text-slate-800 dark:bg-slate-800 dark:text-slate-200";
 
@@ -118,6 +168,11 @@ export default function BondsPage() {
     governingLaw: "",
   });
 
+  const [processSteps, setProcessSteps] = useState<ProcessStep[]>([]);
+  const [selectedStep, setSelectedStep] = useState("");
+  const [generatingDocs, setGeneratingDocs] = useState(false);
+  const [bondProcessDocs, setBondProcessDocs] = useState<BondProcessDoc[]>([]);
+
   function authHeaders(): HeadersInit {
     const token = localStorage.getItem("auth_token");
     return token ? { Authorization: `Bearer ${token}` } : {};
@@ -163,6 +218,7 @@ export default function BondsPage() {
       const data = (await res.json()) as { bond: Bond; documents: BondDocument[] };
       setSelectedBond(data.bond);
       setDocs(data.documents);
+      void loadBondProcessDocs(bondId);
     } catch (error: any) {
       console.error(error);
       toast({
@@ -177,8 +233,102 @@ export default function BondsPage() {
     const token = localStorage.getItem("auth_token");
     if (token) {
       void loadBonds();
+      void loadProcessSteps();
     }
   }, []);
+
+  async function loadProcessSteps() {
+    try {
+      const res = await fetch("/api/admin/docs/steps", {
+        headers: {
+          "Content-Type": "application/json",
+          ...authHeaders(),
+        },
+      });
+      if (!res.ok) {
+        return;
+      }
+      const data = (await res.json()) as { steps: ProcessStep[] };
+      setProcessSteps(data.steps || []);
+    } catch (error) {
+      console.error("Failed to load process steps:", error);
+    }
+  }
+
+  async function loadBondProcessDocs(bondId: number) {
+    try {
+      const res = await fetch(`/api/admin/bonds/${bondId}/documents`, {
+        headers: {
+          "Content-Type": "application/json",
+          ...authHeaders(),
+        },
+      });
+      if (!res.ok) {
+        return;
+      }
+      const data = (await res.json()) as { documents: BondProcessDoc[] };
+      setBondProcessDocs(data.documents || []);
+    } catch (error) {
+      console.error("Failed to load bond process docs:", error);
+    }
+  }
+
+  async function handleGenerateDocuments() {
+    if (!selectedBond || !selectedStep) return;
+    setGeneratingDocs(true);
+    try {
+      const res = await fetch(`/api/admin/bonds/${selectedBond.id}/generate-docs`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...authHeaders(),
+        },
+        body: JSON.stringify({ step: selectedStep }),
+      });
+      if (!res.ok) {
+        const errorData = await res.json();
+        throw new Error(errorData.error || "Failed to generate documents");
+      }
+      const data = (await res.json()) as { docs: GeneratedDoc[]; message: string };
+      toast({
+        title: "Documents Generated",
+        description: data.message,
+      });
+      void loadBondProcessDocs(selectedBond.id);
+    } catch (error: any) {
+      console.error(error);
+      toast({
+        title: "Error generating documents",
+        description: error.message ?? "Unexpected error",
+        variant: "destructive",
+      });
+    } finally {
+      setGeneratingDocs(false);
+    }
+  }
+
+  function handleDownloadDoc(bondId: number, docId: number, filename: string) {
+    const token = localStorage.getItem("auth_token");
+    const url = `/api/admin/bonds/${bondId}/documents/${docId}`;
+    fetch(url, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((res) => res.blob())
+      .then((blob) => {
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = filename;
+        a.click();
+      })
+      .catch((err) => {
+        console.error("Download failed:", err);
+        toast({
+          title: "Download failed",
+          description: "Could not download document",
+          variant: "destructive",
+        });
+      });
+  }
 
   function handleFormChange<K extends keyof typeof form>(key: K, value: string) {
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -796,6 +946,96 @@ export default function BondsPage() {
                     onChange={(e) => setDraft(e.target.value)}
                     placeholder="AI-generated draft will appear here. Always have qualified counsel review before use."
                   />
+                </div>
+
+                <div className="space-y-3 border-t pt-3">
+                  <div>
+                    <h4 className="text-xs font-semibold">Document Engine (Admin Only)</h4>
+                    <p className="text-[10px] text-muted-foreground">
+                      Generate legal/financial PDFs for each step in the bond lifecycle.
+                    </p>
+                  </div>
+
+                  {processSteps.length > 0 ? (
+                    <div className="space-y-2">
+                      <Label htmlFor="processStep" className="text-xs">Process Step</Label>
+                      <select
+                        id="processStep"
+                        data-testid="select-process-step"
+                        value={selectedStep}
+                        onChange={(e) => setSelectedStep(e.target.value)}
+                        className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                      >
+                        <option value="">Select a process step…</option>
+                        {processSteps.map((ps) => (
+                          <option key={ps.step} value={ps.step}>
+                            {STEP_LABELS[ps.step] || ps.step} ({ps.docTypes.length} docs)
+                          </option>
+                        ))}
+                      </select>
+
+                      {selectedStep && (
+                        <div className="text-[10px] text-muted-foreground space-y-1">
+                          <p className="font-medium">Documents to generate:</p>
+                          <ul className="list-disc list-inside">
+                            {processSteps
+                              .find((ps) => ps.step === selectedStep)
+                              ?.docTypes.map((dt) => (
+                                <li key={dt}>{DOC_TYPE_LABELS[dt] || dt}</li>
+                              ))}
+                          </ul>
+                        </div>
+                      )}
+
+                      <Button
+                        size="sm"
+                        onClick={handleGenerateDocuments}
+                        disabled={generatingDocs || !selectedStep}
+                        data-testid="button-generate-docs"
+                      >
+                        {generatingDocs ? "Generating…" : "Generate Documents"}
+                      </Button>
+                    </div>
+                  ) : (
+                    <p className="text-[10px] text-muted-foreground">
+                      Loading process steps… (Admin access required)
+                    </p>
+                  )}
+
+                  {bondProcessDocs.length > 0 && (
+                    <div className="space-y-2 mt-3">
+                      <p className="text-xs font-medium">Generated Documents</p>
+                      <div className="space-y-1">
+                        {bondProcessDocs.map((doc) => (
+                          <div
+                            key={doc.id}
+                            className="flex items-center justify-between gap-2 border rounded-md px-2 py-1.5"
+                            data-testid={`doc-item-${doc.id}`}
+                          >
+                            <div>
+                              <p className="text-xs font-medium">
+                                {DOC_TYPE_LABELS[doc.docType] || doc.docType}
+                              </p>
+                              <p className="text-[10px] text-muted-foreground">
+                                {STEP_LABELS[doc.processStep] || doc.processStep} ·{" "}
+                                <Badge variant="outline" className="text-[10px] px-1 py-0">
+                                  {doc.status}
+                                </Badge>
+                              </p>
+                            </div>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => handleDownloadDoc(doc.bondId, doc.id, doc.filename)}
+                              data-testid={`button-download-doc-${doc.id}`}
+                            >
+                              Download
+                            </Button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             )}
