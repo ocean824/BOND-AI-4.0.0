@@ -37,8 +37,9 @@ Preferred communication style: Simple, everyday language.
 ### Authentication & Authorization
 - **Strategy**: JWT tokens (7-day expiration) stored in localStorage.
 - **Password Security**: Bcrypt hashing.
-- **User Roles**: Admin and Analyst.
+- **User Roles**: Admin, Analyst, and Investor.
 - **Admin Access**: Full privileges, universal data visibility, CRUD operations on all resources, separate token storage, and dedicated admin endpoints/panel. Admin bypasses all ownership verification checks.
+- **Investor Access**: Limited to Bond Exchange features (overview, auctions, bidding). Cannot access underwriting, judgment management, or bundle operations.
 
 ### AI Integration
 - **Provider**: OpenAI API (via Replit AI Integrations).
@@ -102,6 +103,23 @@ Preferred communication style: Simple, everyday language.
 - **Integration**: Node.js Express backend communicates with Python FastAPI service via HTTP.
 - **Configuration**: Optional feature activated via `FASTAPI_BASE_URL` and `FASTAPI_INTERNAL_TOKEN` environment variables.
 - **Security**: Internal token authentication between services, admin-only refresh endpoint.
+
+### Bond Exchange System
+- **Functionality**: Investor auction system for trading perfected bonds with 5-day auctions and reserve price bidding.
+- **Database Tables**: `auctions` stores auction details (status, start/end times, reserve price, winning bid); `auction_bids` stores individual bids with investor IDs and amounts. Additional bond columns: `isPerfected`, `perfectedAt`, `expectedPerfectedAt`, `currentAuctionId`.
+- **Bond Perfection Workflow**: When a bond becomes legally perfected, admin triggers perfection which marks the bond as perfected and creates a 5-day auction with specified reserve price.
+- **Auction Mechanics**: Auctions are ACTIVE when started, COMPLETED when reserve price is met by a bid, or EXPIRED when time runs out without meeting reserve. Reserve price bidding means the auction ends immediately when a bid meets or exceeds the reserve.
+- **API Endpoints**:
+  - `GET /api/investor/overview` - Aggregated bond totals by time period (7 days, 30 days, later)
+  - `GET /api/investor/auctions` - List active auctions open for bidding
+  - `GET /api/investor/auctions/:id` - Get auction details with highest bid
+  - `POST /api/investor/auctions/:id/bids` - Place a bid on an auction (must exceed current highest by $1)
+  - `GET /api/investor/my-bids` - List bids for the logged-in investor
+  - `POST /api/admin/bonds/:id/perfect` - Admin endpoint to perfect a bond and create auction
+  - `POST /api/admin/auctions/close-expired` - Admin endpoint to close expired auctions
+- **Frontend Pages**: InvestorOverview (aggregate totals), InvestorExchange (auction table with bidding), InvestorMyBids (bid history).
+- **Role-Based Navigation**: Sidebar shows Bond Exchange menu items only for admin and investor roles.
+- **Security**: Investor auth middleware requires investor or admin role. Admin has full access to perfection and auction management endpoints.
 
 ## External Dependencies
 
