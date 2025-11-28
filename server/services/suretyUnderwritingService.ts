@@ -47,12 +47,29 @@ export async function computeSuretyUnderwriting(
   }
 
   const trustData = trust[0];
-  const trustMaxLimit = parseFloat(trustData.maxSingleBondLimit || "0");
-  const trustAggregateLimit = parseFloat(trustData.aggregateBondLimit || "0");
-  const trustCurrentExposure = parseFloat(trustData.currentExposure || "0");
-  const insuranceThreshold = parseFloat(trustData.requiresInsuranceAbove || "0");
+  
+  function parseLimitToInfinity(value: string | null | undefined): number {
+    if (!value || value === "" || value === "null" || value === "undefined") {
+      return Infinity;
+    }
+    const parsed = parseFloat(value);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : Infinity;
+  }
+  
+  function parseNumericWithDefault(value: string | null | undefined, defaultValue: number): number {
+    if (!value || value === "" || value === "null" || value === "undefined") {
+      return defaultValue;
+    }
+    const parsed = parseFloat(value);
+    return Number.isFinite(parsed) ? parsed : defaultValue;
+  }
 
-  if (bondPenalSum > trustMaxLimit) {
+  const trustMaxLimit = parseLimitToInfinity(trustData.maxSingleBondLimit);
+  const trustAggregateLimit = parseLimitToInfinity(trustData.aggregateBondLimit);
+  const trustCurrentExposure = parseNumericWithDefault(trustData.currentExposure, 0);
+  const insuranceThreshold = parseNumericWithDefault(trustData.requiresInsuranceAbove, 0);
+
+  if (trustMaxLimit !== Infinity && bondPenalSum > trustMaxLimit) {
     return {
       decision: "DECLINED",
       collateralRequiredAmount: 0,
@@ -65,7 +82,7 @@ export async function computeSuretyUnderwriting(
   }
 
   const projectedExposure = trustCurrentExposure + bondPenalSum;
-  if (projectedExposure > trustAggregateLimit) {
+  if (trustAggregateLimit !== Infinity && projectedExposure > trustAggregateLimit) {
     return {
       decision: "DECLINED",
       collateralRequiredAmount: 0,

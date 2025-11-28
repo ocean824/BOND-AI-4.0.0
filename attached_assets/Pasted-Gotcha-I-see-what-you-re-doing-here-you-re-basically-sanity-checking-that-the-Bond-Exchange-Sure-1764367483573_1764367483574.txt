@@ -1,0 +1,359 @@
+Gotcha, I see what you’re doing here: you’re basically sanity-checking that the Bond Exchange + Surety + Trust governance stuff we’ve designed is still fully consistent with:
+
+✅ INVESTORS = exchange only, and
+
+✅ Only ADMIN can touch anything in the bond pipeline and generate any documents for any step.
+
+Let me lock that down cleanly and give you concrete code + a “documents per step” map you can hand straight to Replit / your dev.
+
+1. Single source of truth for roles
+
+In your shared types:
+
+// src/types/auth.ts
+export type AppRole = "ADMIN" | "UNDERWRITER" | "INTERNAL" | "INVESTOR";
+
+export interface AuthUser {
+  id: string;
+  email: string;
+  role: AppRole;
+}
+
+
+In your Drizzle users table (already close to this):
+
+// src/db/schema/users.ts
+import { pgTable, uuid, text } from "drizzle-orm/pg-core";
+
+export const users = pgTable("users", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  email: text("email").notNull().unique(),
+  passwordHash: text("password_hash").notNull(),
+  role: text("role").notNull().default("INTERNAL"), // ADMIN | UNDERWRITER | INTERNAL | INVESTOR
+});
+
+2. Backend guards – investor hard wall + admin-only docs
+2.1. Core auth + role helpers (Express-style)
+// src/middleware/auth.ts
+import type { Request, Response, NextFunction } from "express";
+import type { AppRole, AuthUser } from "../types/auth";
+
+declare global {
+  namespace Express {
+    interface Request {
+      user?: AuthUser;
+    }
+  }
+}
+
+// Generic role gate
+export function requireAuth(allowedRoles?: AppRole[]) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    const user = req.user;
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+
+    if (allowedRoles && !allowedRoles.includes(user.role)) {
+      return res.status(403).json({ error: "Forbidden" });
+    }
+
+    next();
+  };
+}
+
+// Simple ADMIN-only wrapper
+export function requireAdminOnly(req: Request, res: Response, next: NextFunction) {
+  const user = req.user;
+  if (!user || user.role !== "ADMIN") {
+    return res.status(403).json({ error: "Admin access required" });
+  }
+  next();
+}
+
+// Global guard: INVESTORS can *only* see /auth/* + /investor/*
+export function blockInvestorsForNonInvestorRoutes(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) {
+  const user = req.user;
+
+  if (user?.role === "INVESTOR") {
+    const path = req.path;
+
+    if (path.startsWith("/auth/") || path.startsWith("/investor/")) {
+      return next();
+    }
+
+    return res.status(403).json({
+      error: "Investors cannot access this resource",
+    });
+  }
+
+  // all other roles (ADMIN/UNDERWRITER/INTERNAL) proceed normally
+  next();
+}
+
+
+In your main server file:
+
+// src/index.ts
+import express from "express";
+import { blockInvestorsForNonInvestorRoutes } from "./middleware/auth";
+
+const app = express();
+
+// ... your auth middleware that sets req.user ...
+
+// 🔐 Hard wall investors away from everything except /auth + /investor
+app.use(blockInvestorsForNonInvestorRoutes);
+
+// Mount routes AFTER this
+// app.use("/investor", investorRouter);
+// app.use("/admin", adminRouter);
+// ...
+
+
+Result:
+
+An INVESTOR cannot hit any /admin, /bonds, /surety, /docs, /trust, etc.
+
+Even if they guess URLs or mess with the front-end, they get 403.
+
+2.2. Surety vault: ADMIN + PIN
+
+For the Surety button (judgment surety underwriting):
+
+// src/middleware/suretyPin.ts
+import type { Request, Response, NextFunction } from "express";
+
+export function requireSuretyPin(req: Request, res: Response, next: NextFunction) {
+  const user = req.user;
+  if (!user || user.role !== "ADMIN") {
+    return res.status(403).json({ error: "Admin access required" });
+  }
+
+  const headerPin = req.header("x-surety-pin");
+  const expected = process.env.SURETY_ADMIN_PIN;
+
+  if (!expected) {
+    return res.status(500).json({ error: "Surety PIN not configured" });
+  }
+
+  if (headerPin !== expected) {
+    return res.status(403).json({ error: "Invalid Surety PIN" });
+  }
+
+  next();
+}
+
+
+Use it on all Surety routes:
+
+// src/routes/adminSurety.ts
+import { Router } from "express";
+import { requireSuretyPin } from "../middleware/suretyPin";
+
+export const adminSuretyRouter = Router();
+
+adminSuretyRouter.use(requireSuretyPin); // 🔐 Admin + PIN
+
+adminSuretyRouter.post("/cases", async (req, res) => {
+  // create JUDGMENT surety case...
+});
+
+adminSuretyRouter.post("/cases/:id/underwrite", async (req, res) => {
+  // run underwriting engine...
+});
+
+// etc.
+
+3. ADMIN-only document engine: every step of the bond process
+
+Now, per your line:
+
+“The Bond Valuation App must have the capability and literally be able to create all the required and necessary documents to ensure that every step of the bond process is met and satisfied.”
+
+Let’s centralize document generation behind one ADMIN-only API:
+
+3.1. Doc types & service
+// src/services/documentEngine.ts
+export type BondProcessStep =
+  | "JUDGMENT_TO_BOND"
+  | "PERFECTION"
+  | "SURETY_UNDERWRITING"
+  | "SURETY_ACTIVATION"
+  | "EXCHANGE_LISTING"
+  | "EXCHANGE_SALE"
+  | "TRUST_ALLOCATION";
+
+export type DocType =
+  | "BOND_TERM_SHEET"
+  | "BOND_INSTRUMENT"
+  | "PERFECTION_CERT"
+  | "GIA"
+  | "COLLATERAL_AGREEMENT"
+  | "SURETY_TRUST_RESOLUTION"
+  | "UNDERWRITING_REPORT"
+  | "EXCHANGE_OFFERING_SHEET"
+  | "INVESTOR_SUBSCRIPTION"
+  | "TRADE_CONFIRMATION"
+  | "TRUST_BOARD_MINUTES"
+  | "TRUST_ALLOCATION_RESOLUTION";
+
+interface GenerateDocsInput {
+  bondId: string;
+  step: BondProcessStep;
+  suretyCaseId?: string;
+  trustId?: string;
+}
+
+interface GeneratedDoc {
+  id: string;
+  docType: DocType;
+  storagePath: string;
+}
+
+export async function generateDocsForBondStep(
+  input: GenerateDocsInput,
+): Promise<GeneratedDoc[]> {
+  const { bondId, step, suretyCaseId, trustId } = input;
+
+  // 🔎 Pull bond/surety/trust data from DB here
+  // const bond = await db.query.bonds.findFirst({ where: ... });
+  // const suretyCase = suretyCaseId ? await ... : null;
+  // const trust = trustId ? await ... : null;
+
+  const docsToCreate: DocType[] = [];
+
+  switch (step) {
+    case "JUDGMENT_TO_BOND":
+      docsToCreate.push("BOND_TERM_SHEET", "BOND_INSTRUMENT");
+      break;
+    case "PERFECTION":
+      docsToCreate.push("PERFECTION_CERT");
+      break;
+    case "SURETY_UNDERWRITING":
+      docsToCreate.push("UNDERWRITING_REPORT");
+      break;
+    case "SURETY_ACTIVATION":
+      docsToCreate.push("GIA", "COLLATERAL_AGREEMENT", "SURETY_TRUST_RESOLUTION");
+      break;
+    case "EXCHANGE_LISTING":
+      docsToCreate.push("EXCHANGE_OFFERING_SHEET");
+      break;
+    case "EXCHANGE_SALE":
+      docsToCreate.push("INVESTOR_SUBSCRIPTION", "TRADE_CONFIRMATION");
+      break;
+    case "TRUST_ALLOCATION":
+      docsToCreate.push("TRUST_BOARD_MINUTES", "TRUST_ALLOCATION_RESOLUTION");
+      break;
+  }
+
+  const generated: GeneratedDoc[] = [];
+
+  for (const docType of docsToCreate) {
+    // 👇 Here you plug in your real template/PDF logic (Handlebars, Docx, etc.)
+    // 1) Build template context from bond/surety/trust.
+    // 2) Render to PDF/docx.
+    // 3) Store in /docs/{bondId}/{docType}.pdf (or S3, etc.)
+    const storagePath = `/docs/${bondId}/${docType}_${Date.now()}.pdf`;
+
+    // await db.insert(suretyDocuments or bondDocuments).values({
+    //   caseId: suretyCaseId ?? null,
+    //   bondId,
+    //   docType,
+    //   storagePath,
+    //   status: "DRAFT",
+    // });
+
+    generated.push({
+      id: crypto.randomUUID(),
+      docType,
+      storagePath,
+    });
+  }
+
+  return generated;
+}
+
+3.2. ADMIN-only route to generate docs for a step
+// src/routes/adminBondDocs.ts
+import { Router } from "express";
+import { requireAdminOnly } from "../middleware/auth";
+import { generateDocsForBondStep } from "../services/documentEngine";
+
+export const adminBondDocsRouter = Router();
+
+// 🔐 Only ADMIN can generate documents for any step
+adminBondDocsRouter.post(
+  "/admin/bonds/:bondId/generate-docs",
+  requireAdminOnly,
+  async (req, res) => {
+    const { bondId } = req.params;
+    const { step, suretyCaseId, trustId } = req.body as {
+      step: string;
+      suretyCaseId?: string;
+      trustId?: string;
+    };
+
+    try {
+      const docs = await generateDocsForBondStep({
+        bondId,
+        step: step as any,
+        suretyCaseId,
+        trustId,
+      });
+
+      return res.json({ docs });
+    } catch (err: any) {
+      console.error(err);
+      return res.status(500).json({ error: "Doc generation failed" });
+    }
+  },
+);
+
+
+🔒 Investors can never hit this route:
+
+They are blocked by blockInvestorsForNonInvestorRoutes globally.
+
+Even if that changed, requireAdminOnly still rejects them.
+
+On the front-end, you only show a “Generate documents for this step” button on the Admin dashboard (never in investor portal).
+
+4. “Every step of the bond process” – document checklist
+
+Here’s a clean matrix you (or a lawyer) can refine, but the app is architected to handle every row via the documentEngine above:
+
+Step in pipeline	What happens in app	Example docs the app should generate
+1. Judgment → Bond	Admin converts judgment into a Bond record	BOND_TERM_SHEET, BOND_INSTRUMENT (internal term sheet + the actual bond/IOU form)
+2. Perfection	Bond passes internal compliance, liens/filings done	PERFECTION_CERT (certificate of perfection, internal memo that all filings are complete)
+3. Surety underwriting	Surety Trust analyzes the judgment bond	UNDERWRITING_REPORT (summary of risk, capacity check, collateral/indemnity recommendations)
+4. Surety activation	Trust agrees to act as surety	GIA (General Indemnity Agreement), COLLATERAL_AGREEMENT, SURETY_TRUST_RESOLUTION (board/trust resolution authorizing surety)
+5. Exchange listing	Bond is listed for auction to investors	EXCHANGE_OFFERING_SHEET (summary for investors, no sensitive debtor details if you choose to mask)
+6. Exchange sale / closing	Auction completes, winning bid + settlement	INVESTOR_SUBSCRIPTION (or purchase agreement), TRADE_CONFIRMATION / closing statement
+7. Trust allocation & minutes	Proceeds allocated via Development Trust / management LLC	TRUST_BOARD_MINUTES, TRUST_ALLOCATION_RESOLUTION (cashflow split, tax reserves, project funding, etc.)
+
+All of those doc types are centralized in code as DocType, and only ADMIN can trigger them.
+
+5. Front-end: role-based UX (short & sweet)
+
+If user.role === "INVESTOR" → show only the investor portal:
+
+/investor/overview (totals + timelines only)
+
+/investor/exchange
+
+/investor/my-bids
+
+If user.role === "ADMIN" → show:
+
+Full Bond dashboard
+
+Surety button (PIN modal)
+
+Trust Board / Minutes
+
+“Generate Docs” buttons that call /admin/bonds/:bondId/generate-docs.
+
+No doc-generation buttons, no Surety, no bond details ever appear in the investor UI.
