@@ -22,6 +22,11 @@ The platform uses a React 18 frontend with Shadcn UI, an Express.js (TypeScript)
 *   **Trending Topics System**: An optional Python FastAPI microservice fetches and summarizes bond market news using AI, including risk level and sentiment analysis.
 *   **Bond Exchange System**: An investor auction system for trading perfected bonds with 5-day auctions and reserve price bidding, enforced with a global investor gate.
 *   **Surety Bond Underwriting System**: A complete surety bond underwriting system with PIN-protected admin access, risk-based collateral calculations, and full lifecycle management for judgment bonds.
+*   **Document Engine (Admin Only)**: Complete document generation system for every step of the bond lifecycle:
+    - 7 Bond Process Steps: JUDGMENT_TO_BOND, PERFECTION, SURETY_UNDERWRITING, SURETY_ACTIVATION, EXCHANGE_LISTING, EXCHANGE_SALE, TRUST_ALLOCATION
+    - 12 Document Types: Bond Term Sheet, Bond Instrument, Perfection Certificate, GIA, Collateral Agreement, Surety Trust Resolution, Underwriting Report, Exchange Offering Sheet, Investor Subscription, Trade Confirmation, Trust Board Minutes, Trust Allocation Resolution
+    - PDFs generated dynamically using bond data from database
+    - Documents tracked in bondProcessDocuments table with status workflow (DRAFT → FINAL → SIGNED → ARCHIVED)
 
 ### Technical Implementations
 *   **Frontend**: React 18, Vite, Shadcn UI (Radix UI + Tailwind CSS), TanStack Query, Wouter.
