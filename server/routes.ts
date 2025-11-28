@@ -11,7 +11,22 @@ import { getTrendingTopics, refreshTrendingTopics } from "./services/trendingSer
 import { extractBondDataFromDocument } from "./services/bondExtractionService";
 import { computeUnderwritingMetrics, generateUnderwritingNarrative } from "./services/underwritingService";
 import { getInvestorOverview, handleBondPerfected, closeExpiredAuctions } from "./services/bondPerfectionService";
-import { auctions, auctionBids } from "@shared/schema";
+import {
+  computeSuretyUnderwriting,
+  createSuretyCase,
+  approveSuretyCase,
+  declineSuretyCase,
+  recordCollateralPosted,
+  activateSuretyCase,
+  releaseSuretyCase,
+  getAllSuretyCases,
+  getSuretyCaseById,
+  getAllSuretyTrusts,
+  getSuretyTrustById,
+  createSuretyTrust,
+  updateSuretyTrust
+} from "./services/suretyUnderwritingService";
+import { auctions, auctionBids, suretyTrusts, suretyCases, suretyCollateral } from "@shared/schema";
 import { eq, desc, and, lt, gt } from "drizzle-orm";
 import bcrypt from "bcryptjs";
 import { z } from "zod";
@@ -109,6 +124,45 @@ export async function registerRoutes(app: Express): Promise<Server> {
       console.error("Get user error:", error);
       res.status(500).json({ error: "Failed to get user" });
     }
+  });
+
+  // ===== GLOBAL INVESTOR GATE =====
+  // Investors can ONLY access /api/investor/* and /api/auth/* routes
+  // This is a hard wall that blocks investors from all other routes
+  app.use("/api", (req, res, next) => {
+    const path = req.path;
+    
+    // Allow all auth routes
+    if (path.startsWith("/auth")) {
+      return next();
+    }
+    
+    // Allow all investor routes
+    if (path.startsWith("/investor")) {
+      return next();
+    }
+    
+    // Check if user is authenticated and is an investor
+    const authHeader = req.headers.authorization;
+    if (authHeader?.startsWith("Bearer ")) {
+      try {
+        const token = authHeader.substring(7);
+        const decoded = verifyToken(token);
+        
+        if (decoded && decoded.role === "investor") {
+          // Investor trying to access non-investor route - block them
+          return res.status(403).json({ 
+            error: "Access denied",
+            message: "Investor accounts can only access Bond Exchange features"
+          });
+        }
+      } catch (e) {
+        // Token verification failed, let next middleware handle auth
+      }
+    }
+    
+    // Allow all other requests to proceed (admin, analyst, or unauthenticated)
+    next();
   });
 
   // ===== JUDGMENT ROUTES =====
@@ -1527,6 +1581,289 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Close expired auctions error:", error);
       res.status(500).json({ error: "Failed to close expired auctions" });
+    }
+  });
+
+  // ===== SURETY SYSTEM ROUTES =====
+  // PIN-protected admin middleware for surety operations
+  const suretyPinMiddleware = (req: AuthRequest, res: any, next: any) => {
+    const pin = req.headers["x-surety-pin"] as string;
+    const configuredPin = process.env.SURETY_ADMIN_PIN;
+    
+    if (!configuredPin) {
+      console.warn("SURETY_ADMIN_PIN not configured - surety routes disabled");
+      return res.status(503).json({ error: "Surety system not configured" });
+    }
+    
+    if (!pin || pin !== configuredPin) {
+      return res.status(403).json({ error: "Invalid surety PIN" });
+    }
+    
+    next();
+  };
+
+  // GET /api/admin/surety/trusts - List all surety trusts
+  app.get("/api/admin/surety/trusts", adminAuthMiddleware, suretyPinMiddleware, async (_req: AuthRequest, res) => {
+    try {
+      const trusts = await getAllSuretyTrusts();
+      res.json({ trusts });
+    } catch (error) {
+      console.error("Get surety trusts error:", error);
+      res.status(500).json({ error: "Failed to get surety trusts" });
+    }
+  });
+
+  // POST /api/admin/surety/trusts - Create a new surety trust
+  app.post("/api/admin/surety/trusts", adminAuthMiddleware, suretyPinMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const { name, trustType, maxSingleBondLimit, aggregateBondLimit, requiresInsuranceAbove, notes } = req.body;
+      
+      if (!name || !maxSingleBondLimit || !aggregateBondLimit) {
+        return res.status(400).json({ 
+          error: "Name, maxSingleBondLimit, and aggregateBondLimit are required" 
+        });
+      }
+
+      const trust = await createSuretyTrust({
+        name,
+        trustType,
+        maxSingleBondLimit: parseFloat(maxSingleBondLimit),
+        aggregateBondLimit: parseFloat(aggregateBondLimit),
+        requiresInsuranceAbove: requiresInsuranceAbove ? parseFloat(requiresInsuranceAbove) : undefined,
+        notes
+      });
+
+      res.status(201).json({ trust });
+    } catch (error) {
+      console.error("Create surety trust error:", error);
+      res.status(500).json({ error: "Failed to create surety trust" });
+    }
+  });
+
+  // GET /api/admin/surety/trusts/:id - Get surety trust by ID
+  app.get("/api/admin/surety/trusts/:id", adminAuthMiddleware, suretyPinMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const trustId = parseInt(req.params.id);
+      if (isNaN(trustId)) {
+        return res.status(400).json({ error: "Invalid trust ID" });
+      }
+
+      const trust = await getSuretyTrustById(trustId);
+      if (!trust) {
+        return res.status(404).json({ error: "Trust not found" });
+      }
+
+      res.json({ trust });
+    } catch (error) {
+      console.error("Get surety trust error:", error);
+      res.status(500).json({ error: "Failed to get surety trust" });
+    }
+  });
+
+  // PATCH /api/admin/surety/trusts/:id - Update a surety trust
+  app.patch("/api/admin/surety/trusts/:id", adminAuthMiddleware, suretyPinMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const trustId = parseInt(req.params.id);
+      if (isNaN(trustId)) {
+        return res.status(400).json({ error: "Invalid trust ID" });
+      }
+
+      const trust = await updateSuretyTrust(trustId, req.body);
+      if (!trust) {
+        return res.status(404).json({ error: "Trust not found" });
+      }
+
+      res.json({ trust });
+    } catch (error) {
+      console.error("Update surety trust error:", error);
+      res.status(500).json({ error: "Failed to update surety trust" });
+    }
+  });
+
+  // GET /api/admin/surety/cases - List all surety cases
+  app.get("/api/admin/surety/cases", adminAuthMiddleware, suretyPinMiddleware, async (_req: AuthRequest, res) => {
+    try {
+      const cases = await getAllSuretyCases();
+      res.json({ cases });
+    } catch (error) {
+      console.error("Get surety cases error:", error);
+      res.status(500).json({ error: "Failed to get surety cases" });
+    }
+  });
+
+  // GET /api/admin/surety/cases/:id - Get surety case by ID
+  app.get("/api/admin/surety/cases/:id", adminAuthMiddleware, suretyPinMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const caseId = parseInt(req.params.id);
+      if (isNaN(caseId)) {
+        return res.status(400).json({ error: "Invalid case ID" });
+      }
+
+      const suretyCase = await getSuretyCaseById(caseId);
+      if (!suretyCase) {
+        return res.status(404).json({ error: "Case not found" });
+      }
+
+      res.json({ case: suretyCase });
+    } catch (error) {
+      console.error("Get surety case error:", error);
+      res.status(500).json({ error: "Failed to get surety case" });
+    }
+  });
+
+  // POST /api/admin/surety/underwrite - Run surety underwriting on a bond
+  app.post("/api/admin/surety/underwrite", adminAuthMiddleware, suretyPinMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const { bondId, suretyTrustId, bondPenalSum, principalRiskScore, principalId } = req.body;
+      
+      if (!bondId || !suretyTrustId || !bondPenalSum || principalRiskScore === undefined) {
+        return res.status(400).json({ 
+          error: "bondId, suretyTrustId, bondPenalSum, and principalRiskScore are required" 
+        });
+      }
+
+      const underwritingResult = await computeSuretyUnderwriting({
+        bondId: parseInt(bondId),
+        suretyTrustId: parseInt(suretyTrustId),
+        bondPenalSum: parseFloat(bondPenalSum),
+        principalRiskScore: parseFloat(principalRiskScore),
+        principalId: principalId ? parseInt(principalId) : undefined
+      });
+
+      // Create the surety case with underwriting result
+      const suretyCase = await createSuretyCase(
+        {
+          bondId: parseInt(bondId),
+          suretyTrustId: parseInt(suretyTrustId),
+          bondPenalSum: parseFloat(bondPenalSum),
+          principalRiskScore: parseFloat(principalRiskScore),
+          principalId: principalId ? parseInt(principalId) : undefined
+        },
+        req.user!.id,
+        underwritingResult
+      );
+
+      res.status(201).json({ 
+        underwritingResult, 
+        case: suretyCase 
+      });
+    } catch (error: any) {
+      console.error("Surety underwriting error:", error);
+      res.status(500).json({ error: error.message || "Failed to run surety underwriting" });
+    }
+  });
+
+  // POST /api/admin/surety/cases/:id/approve - Approve a surety case
+  app.post("/api/admin/surety/cases/:id/approve", adminAuthMiddleware, suretyPinMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const caseId = parseInt(req.params.id);
+      if (isNaN(caseId)) {
+        return res.status(400).json({ error: "Invalid case ID" });
+      }
+
+      const approved = await approveSuretyCase(caseId);
+      if (!approved) {
+        return res.status(404).json({ error: "Case not found" });
+      }
+
+      res.json({ case: approved, message: "Surety case approved" });
+    } catch (error) {
+      console.error("Approve surety case error:", error);
+      res.status(500).json({ error: "Failed to approve surety case" });
+    }
+  });
+
+  // POST /api/admin/surety/cases/:id/decline - Decline a surety case
+  app.post("/api/admin/surety/cases/:id/decline", adminAuthMiddleware, suretyPinMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const caseId = parseInt(req.params.id);
+      if (isNaN(caseId)) {
+        return res.status(400).json({ error: "Invalid case ID" });
+      }
+
+      const { reason } = req.body;
+      const declined = await declineSuretyCase(caseId, reason);
+      if (!declined) {
+        return res.status(404).json({ error: "Case not found" });
+      }
+
+      res.json({ case: declined, message: "Surety case declined" });
+    } catch (error) {
+      console.error("Decline surety case error:", error);
+      res.status(500).json({ error: "Failed to decline surety case" });
+    }
+  });
+
+  // POST /api/admin/surety/cases/:id/collateral - Record collateral posted
+  app.post("/api/admin/surety/cases/:id/collateral", adminAuthMiddleware, suretyPinMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const caseId = parseInt(req.params.id);
+      if (isNaN(caseId)) {
+        return res.status(400).json({ error: "Invalid case ID" });
+      }
+
+      const { collateralType, amount, ilocBankName, ilocReference } = req.body;
+      
+      if (!collateralType || !amount) {
+        return res.status(400).json({ error: "collateralType and amount are required" });
+      }
+
+      if (!["CASH", "ILOC"].includes(collateralType)) {
+        return res.status(400).json({ error: "collateralType must be CASH or ILOC" });
+      }
+
+      await recordCollateralPosted(
+        caseId,
+        collateralType,
+        parseFloat(amount),
+        { bankName: ilocBankName, reference: ilocReference }
+      );
+
+      const updatedCase = await getSuretyCaseById(caseId);
+      res.json({ case: updatedCase, message: "Collateral recorded" });
+    } catch (error: any) {
+      console.error("Record collateral error:", error);
+      res.status(500).json({ error: error.message || "Failed to record collateral" });
+    }
+  });
+
+  // POST /api/admin/surety/cases/:id/activate - Activate a surety case
+  app.post("/api/admin/surety/cases/:id/activate", adminAuthMiddleware, suretyPinMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const caseId = parseInt(req.params.id);
+      if (isNaN(caseId)) {
+        return res.status(400).json({ error: "Invalid case ID" });
+      }
+
+      const activated = await activateSuretyCase(caseId);
+      if (!activated) {
+        return res.status(404).json({ error: "Case not found" });
+      }
+
+      res.json({ case: activated, message: "Surety case activated" });
+    } catch (error) {
+      console.error("Activate surety case error:", error);
+      res.status(500).json({ error: "Failed to activate surety case" });
+    }
+  });
+
+  // POST /api/admin/surety/cases/:id/release - Release a surety case
+  app.post("/api/admin/surety/cases/:id/release", adminAuthMiddleware, suretyPinMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const caseId = parseInt(req.params.id);
+      if (isNaN(caseId)) {
+        return res.status(400).json({ error: "Invalid case ID" });
+      }
+
+      const released = await releaseSuretyCase(caseId);
+      if (!released) {
+        return res.status(404).json({ error: "Case not found" });
+      }
+
+      res.json({ case: released, message: "Surety case released" });
+    } catch (error) {
+      console.error("Release surety case error:", error);
+      res.status(500).json({ error: "Failed to release surety case" });
     }
   });
 
