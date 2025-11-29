@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { Shield, Check, TrendingUp, Zap, Crown } from "lucide-react";
+import { Shield, Check, TrendingUp, Zap, Crown, ArrowLeft } from "lucide-react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 
@@ -54,8 +54,13 @@ const membershipTiers: MembershipTier[] = [
 
 export default function InvestorMembershipPage() {
   const [, setLocation] = useLocation();
-  const { user } = useAuth();
+  const { user, logout } = useAuth();
   const { toast } = useToast();
+
+  const handleBack = async () => {
+    await logout();
+    setLocation("/");
+  };
   const [selectedTier, setSelectedTier] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
 
@@ -93,6 +98,18 @@ export default function InvestorMembershipPage() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-background p-4">
       <div className="w-full max-w-4xl">
+        <div className="mb-4">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={handleBack}
+            className="gap-2"
+            data-testid="button-back"
+          >
+            <ArrowLeft className="w-4 h-4" />
+            Back to Login
+          </Button>
+        </div>
         <div className="flex items-center justify-center mb-8">
           <div className="flex items-center gap-3">
             <div className="flex items-center justify-center w-12 h-12 rounded-lg bg-primary text-primary-foreground">
