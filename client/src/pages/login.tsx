@@ -110,20 +110,30 @@ export default function LoginPage() {
         </Card>
 
         <div className="mt-6 grid grid-cols-2 gap-3">
-          <div className="flex items-center gap-2 p-3 rounded-md bg-muted/50 border">
+          <button
+            type="button"
+            onClick={() => setLocation("/register?role=analyst")}
+            className="flex items-center gap-2 p-3 rounded-md bg-muted/50 border hover-elevate active-elevate-2 cursor-pointer text-left"
+            data-testid="button-register-analyst"
+          >
             <FileText className="w-4 h-4 text-primary" />
             <div className="text-xs">
               <p className="font-medium">Analyst</p>
               <p className="text-muted-foreground">Full platform</p>
             </div>
-          </div>
-          <div className="flex items-center gap-2 p-3 rounded-md bg-muted/50 border">
+          </button>
+          <button
+            type="button"
+            onClick={() => setLocation("/register?role=investor")}
+            className="flex items-center gap-2 p-3 rounded-md bg-muted/50 border hover-elevate active-elevate-2 cursor-pointer text-left"
+            data-testid="button-register-investor"
+          >
             <TrendingUp className="w-4 h-4 text-primary" />
             <div className="text-xs">
               <p className="font-medium">Investor</p>
               <p className="text-muted-foreground">Exchange only</p>
             </div>
-          </div>
+          </button>
         </div>
 
         <p className="text-xs text-center text-muted-foreground mt-4">

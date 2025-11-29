@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { useLocation } from "wouter";
+import { useState, useEffect } from "react";
+import { useLocation, useSearch } from "wouter";
 import { useAuth } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -11,6 +11,7 @@ import { Shield, TrendingUp, FileText } from "lucide-react";
 
 export default function RegisterPage() {
   const [, setLocation] = useLocation();
+  const searchString = useSearch();
   const { register } = useAuth();
   const { toast } = useToast();
   const [name, setName] = useState("");
@@ -18,6 +19,14 @@ export default function RegisterPage() {
   const [password, setPassword] = useState("");
   const [accountType, setAccountType] = useState<"analyst" | "investor">("analyst");
   const [isLoading, setIsLoading] = useState(false);
+
+  useEffect(() => {
+    const params = new URLSearchParams(searchString);
+    const role = params.get("role");
+    if (role === "investor" || role === "analyst") {
+      setAccountType(role);
+    }
+  }, [searchString]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
