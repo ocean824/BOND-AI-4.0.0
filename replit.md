@@ -21,6 +21,11 @@ The platform uses a React 18 frontend with Shadcn UI, an Express.js (TypeScript)
 *   **PDF Generation**: Automated creation of professional investor teaser PDFs for bundles.
 *   **Trending Topics System**: An optional Python FastAPI microservice fetches and summarizes bond market news using AI, including risk level and sentiment analysis.
 *   **Bond Exchange System**: An investor auction system for trading perfected bonds with 5-day auctions and reserve price bidding, enforced with a global investor gate.
+*   **Investor Membership System**: Two-tiered Stripe-powered subscription system:
+    - Standard Tier ($199/month): Access to Bond Exchange, view auctions, place bids, track bid history
+    - Premium Tier ($299/month): All Standard features plus priority access, advanced analytics, exclusive auctions
+    - Investors must have an active paid subscription to access Bond Exchange features
+    - Stripe checkout integration with webhook-based subscription status updates
 *   **Surety Bond Underwriting System**: A complete surety bond underwriting system with PIN-protected admin access, risk-based collateral calculations, and full lifecycle management for judgment bonds.
 *   **Document Engine (Admin Only)**: Complete document generation system for every step of the bond lifecycle:
     - 7 Bond Process Steps: JUDGMENT_TO_BOND, PERFECTION, SURETY_UNDERWRITING, SURETY_ACTIVATION, EXCHANGE_LISTING, EXCHANGE_SALE, TRUST_ALLOCATION
@@ -39,12 +44,13 @@ The platform uses a React 18 frontend with Shadcn UI, an Express.js (TypeScript)
 ### Third-Party Services
 *   **Neon Database**: PostgreSQL serverless database.
 *   **OpenAI (via Replit AI Integrations)**: For various AI functionalities.
+*   **Stripe (via Replit Integrations)**: Payment processing for investor memberships with automatic schema sync.
 *   **Replit Platform**: Development and deployment environment.
 *   **FastAPI Python Service** (optional): Microservice for trending topics.
 
 ### Key NPM Packages
 *   **Frontend**: `@tanstack/react-query`, `wouter`, `@radix-ui/*`, `tailwindcss`, `zod`, `lucide-react`, `react-hook-form`.
-*   **Backend**: `drizzle-orm`, `@neondatabase/serverless`, `bcryptjs`, `jsonwebtoken`, `express`, `zod`, `pdfkit`.
+*   **Backend**: `drizzle-orm`, `@neondatabase/serverless`, `bcryptjs`, `jsonwebtoken`, `express`, `zod`, `pdfkit`, `stripe`, `stripe-replit-sync`.
 
 ### Key Python Packages (FastAPI Service)
 *   `fastapi`, `uvicorn[standard]`, `openai`, `pydantic`.

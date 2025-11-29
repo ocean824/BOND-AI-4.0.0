@@ -38,11 +38,12 @@ import bcrypt from "bcryptjs";
 import { z } from "zod";
 import { sql } from "drizzle-orm";
 import { db } from "./db";
-import { judgments, bundleJudgments, pricingReadyJudgmentSchema, pricingInputSchema, insertBondSchema } from "@shared/schema";
+import { judgments, bundleJudgments, pricingReadyJudgmentSchema, pricingInputSchema, insertBondSchema, users } from "@shared/schema";
 import multer from "multer";
 import * as mammoth from "mammoth";
 import path from "path";
 import fs from "fs/promises";
+import { getUncachableStripeClient, getStripePublishableKey } from "./stripeClient";
 
 export async function registerRoutes(app: Express): Promise<Server> {
   // ===== AUTH ROUTES =====
@@ -1331,6 +1332,155 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Create underwriting case error:", error);
       res.status(500).json({ error: "Failed to create underwriting case" });
+    }
+  });
+
+  // ===== INVESTOR MEMBERSHIP ROUTES =====
+  
+  // GET /api/investor/membership/prices - Get membership prices
+  app.get("/api/investor/membership/prices", authMiddleware, async (_req: AuthRequest, res) => {
+    try {
+      const stripe = await getUncachableStripeClient();
+      
+      // Find products with investor_membership metadata
+      const products = await stripe.products.search({
+        query: "metadata['type']:'investor_membership' AND active:'true'"
+      });
+
+      const pricesWithProducts = await Promise.all(
+        products.data.map(async (product) => {
+          const prices = await stripe.prices.list({ 
+            product: product.id, 
+            active: true,
+            limit: 1
+          });
+          
+          const price = prices.data[0];
+          const tier = product.metadata.tier || 'standard';
+          
+          return {
+            productId: product.id,
+            priceId: price?.id,
+            name: product.name,
+            description: product.description,
+            tier,
+            amount: price?.unit_amount || 0,
+            currency: price?.currency || 'usd',
+            interval: price?.recurring?.interval || 'month'
+          };
+        })
+      );
+
+      res.json({ prices: pricesWithProducts });
+    } catch (error) {
+      console.error("Get membership prices error:", error);
+      res.status(500).json({ error: "Failed to get membership prices" });
+    }
+  });
+
+  // POST /api/investor/membership/checkout - Create checkout session
+  app.post("/api/investor/membership/checkout", authMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const userId = req.user?.id;
+      if (!userId) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+
+      const { tier } = req.body;
+      if (!tier || !['standard', 'premium'].includes(tier)) {
+        return res.status(400).json({ error: "Invalid tier. Must be 'standard' or 'premium'" });
+      }
+
+      const user = await storage.getUser(userId);
+      if (!user) {
+        return res.status(404).json({ error: "User not found" });
+      }
+
+      if (user.role !== 'investor') {
+        return res.status(403).json({ error: "Only investors can purchase memberships" });
+      }
+
+      const stripe = await getUncachableStripeClient();
+
+      // Find the product for this tier
+      const products = await stripe.products.search({
+        query: `metadata['type']:'investor_membership' AND metadata['tier']:'${tier}' AND active:'true'`
+      });
+
+      if (products.data.length === 0) {
+        return res.status(404).json({ error: `No ${tier} membership product found` });
+      }
+
+      const product = products.data[0];
+      const prices = await stripe.prices.list({ 
+        product: product.id, 
+        active: true,
+        limit: 1
+      });
+
+      if (prices.data.length === 0) {
+        return res.status(404).json({ error: `No price found for ${tier} membership` });
+      }
+
+      const priceId = prices.data[0].id;
+
+      // Create or get Stripe customer
+      let customerId = user.stripeCustomerId;
+      if (!customerId) {
+        const customer = await stripe.customers.create({
+          email: user.email,
+          name: user.name,
+          metadata: {
+            userId: userId.toString(),
+            role: 'investor'
+          }
+        });
+        customerId = customer.id;
+        
+        // Update user with customer ID
+        await db.update(users)
+          .set({ stripeCustomerId: customerId })
+          .where(eq(users.id, userId));
+      }
+
+      // Create checkout session
+      const baseUrl = `https://${process.env.REPLIT_DOMAINS?.split(',')[0]}`;
+      const session = await stripe.checkout.sessions.create({
+        customer: customerId,
+        mode: 'subscription',
+        line_items: [{
+          price: priceId,
+          quantity: 1
+        }],
+        success_url: `${baseUrl}/checkout/success?session_id={CHECKOUT_SESSION_ID}`,
+        cancel_url: `${baseUrl}/membership`,
+        metadata: {
+          userId: userId.toString(),
+          tier
+        },
+        subscription_data: {
+          metadata: {
+            userId: userId.toString(),
+            tier
+          }
+        }
+      });
+
+      res.json({ url: session.url, sessionId: session.id });
+    } catch (error) {
+      console.error("Checkout error:", error);
+      res.status(500).json({ error: "Failed to create checkout session" });
+    }
+  });
+
+  // GET /api/stripe/publishable-key - Get Stripe publishable key
+  app.get("/api/stripe/publishable-key", async (_req, res) => {
+    try {
+      const key = await getStripePublishableKey();
+      res.json({ publishableKey: key });
+    } catch (error) {
+      console.error("Get publishable key error:", error);
+      res.status(500).json({ error: "Failed to get Stripe configuration" });
     }
   });
 

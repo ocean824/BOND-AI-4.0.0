@@ -10,6 +10,10 @@ export const users = pgTable("users", {
   password: text("password").notNull(),
   name: varchar("name", { length: 255 }).notNull(),
   role: varchar("role", { length: 50 }).notNull().default("analyst"),
+  stripeCustomerId: varchar("stripe_customer_id", { length: 255 }),
+  stripeSubscriptionId: varchar("stripe_subscription_id", { length: 255 }),
+  subscriptionStatus: varchar("subscription_status", { length: 50 }).default("none"),
+  subscriptionTier: varchar("subscription_tier", { length: 50 }),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 

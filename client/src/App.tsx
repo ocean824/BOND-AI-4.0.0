@@ -18,6 +18,8 @@ import UnderwritingPage from "@/pages/underwriting";
 import InvestorOverviewPage from "@/pages/investor-overview";
 import InvestorExchangePage from "@/pages/investor-exchange";
 import InvestorMyBidsPage from "@/pages/investor-my-bids";
+import InvestorMembershipPage from "@/pages/investor-membership";
+import CheckoutSuccessPage from "@/pages/checkout-success";
 import AdminLoginPage from "@/pages/admin-login";
 import AdminPanelPage from "@/pages/admin-panel";
 import SuretyDashboardPage from "@/pages/surety-dashboard";
@@ -74,7 +76,30 @@ function Router() {
   }
 
   // INVESTOR GATE: Investors can ONLY access Bond Exchange routes
+  // Check if investor has active subscription
   if (user.role === "investor") {
+    const hasActiveSubscription = user.subscriptionStatus === "active";
+    
+    // Allow checkout success page regardless of subscription
+    if (location === "/checkout/success") {
+      return (
+        <Switch>
+          <Route path="/checkout/success" component={CheckoutSuccessPage} />
+        </Switch>
+      );
+    }
+    
+    // If no active subscription, redirect to membership page
+    if (!hasActiveSubscription) {
+      return (
+        <Switch>
+          <Route path="/membership" component={InvestorMembershipPage} />
+          <Route component={InvestorMembershipPage} />
+        </Switch>
+      );
+    }
+    
+    // Active subscription - show exchange
     return (
       <AuthenticatedLayout>
         <Switch>
