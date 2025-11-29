@@ -59,6 +59,11 @@ function Router() {
     return (
       <Switch>
         <Route path="/admin/login" component={AdminLoginPage} />
+        <Route path="/admin/surety" component={SuretyDashboardPage} />
+        <Route path="/admin/exchange" component={InvestorExchangePage} />
+        <Route path="/admin/exchange/overview" component={InvestorOverviewPage} />
+        <Route path="/admin/exchange/auctions" component={InvestorExchangePage} />
+        <Route path="/admin/exchange/my-bids" component={InvestorMyBidsPage} />
         <Route path="/admin" component={AdminPanelPage} />
       </Switch>
     );

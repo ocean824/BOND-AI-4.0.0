@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
-import { useLocation } from "wouter";
+import { useLocation, Link } from "wouter";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Shield, Users, FileText, Package, Banknote, LogOut, Database, Settings, AlertCircle } from "lucide-react";
+import { Shield, Users, FileText, Package, Banknote, LogOut, Database, Settings, AlertCircle, Building2, TrendingUp, Gavel, ArrowRight } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { Skeleton } from "@/components/ui/skeleton";
 import { adminApiRequest } from "@/lib/adminQueryClient";
@@ -178,6 +178,69 @@ export default function AdminPanelPage() {
               </CardContent>
             </Card>
           ))}
+        </div>
+
+        <div>
+          <h2 className="text-2xl font-semibold mb-2">Admin Features</h2>
+          <p className="text-muted-foreground mb-4">
+            Access all platform management tools
+          </p>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          <Card className="hover-elevate cursor-pointer" onClick={() => setLocation("/admin/surety")}>
+            <CardHeader className="flex flex-row items-center justify-between gap-4 space-y-0">
+              <div>
+                <CardTitle className="text-lg">Surety Underwriting</CardTitle>
+                <CardDescription>Bond surety management with PIN protection</CardDescription>
+              </div>
+              <div className="flex items-center justify-center w-12 h-12 rounded-md bg-amber-100 dark:bg-amber-900/20">
+                <Building2 className="w-6 h-6 text-amber-600" />
+              </div>
+            </CardHeader>
+            <CardContent>
+              <Button variant="outline" className="w-full" data-testid="button-admin-surety">
+                <span>Access Surety System</span>
+                <ArrowRight className="w-4 h-4 ml-2" />
+              </Button>
+            </CardContent>
+          </Card>
+
+          <Card className="hover-elevate cursor-pointer" onClick={() => setLocation("/admin/exchange")}>
+            <CardHeader className="flex flex-row items-center justify-between gap-4 space-y-0">
+              <div>
+                <CardTitle className="text-lg">Bond Exchange</CardTitle>
+                <CardDescription>Investor auction marketplace</CardDescription>
+              </div>
+              <div className="flex items-center justify-center w-12 h-12 rounded-md bg-blue-100 dark:bg-blue-900/20">
+                <TrendingUp className="w-6 h-6 text-blue-600" />
+              </div>
+            </CardHeader>
+            <CardContent>
+              <Button variant="outline" className="w-full" data-testid="button-admin-exchange">
+                <span>View Exchange</span>
+                <ArrowRight className="w-4 h-4 ml-2" />
+              </Button>
+            </CardContent>
+          </Card>
+
+          <Card className="hover-elevate cursor-pointer" onClick={() => setLocation("/admin/exchange/overview")}>
+            <CardHeader className="flex flex-row items-center justify-between gap-4 space-y-0">
+              <div>
+                <CardTitle className="text-lg">Exchange Overview</CardTitle>
+                <CardDescription>Investment pipeline dashboard</CardDescription>
+              </div>
+              <div className="flex items-center justify-center w-12 h-12 rounded-md bg-green-100 dark:bg-green-900/20">
+                <Gavel className="w-6 h-6 text-green-600" />
+              </div>
+            </CardHeader>
+            <CardContent>
+              <Button variant="outline" className="w-full" data-testid="button-admin-exchange-overview">
+                <span>View Overview</span>
+                <ArrowRight className="w-4 h-4 ml-2" />
+              </Button>
+            </CardContent>
+          </Card>
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
