@@ -1,3 +1,4 @@
+import { useState, useEffect } from "react";
 import { Switch, Route, useLocation } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
@@ -39,6 +40,49 @@ function AuthenticatedLayout({ children }: { children: React.ReactNode }) {
   );
 }
 
+function AdminAuthGuard({ children }: { children: React.ReactNode }) {
+  const [, setLocation] = useLocation();
+  const [isVerified, setIsVerified] = useState(false);
+  const [isChecking, setIsChecking] = useState(true);
+
+  useEffect(() => {
+    const adminToken = localStorage.getItem("admin_token");
+    if (!adminToken) {
+      setLocation("/admin/login");
+      return;
+    }
+
+    fetch("/api/admin/verify", {
+      headers: { Authorization: `Bearer ${adminToken}` },
+    })
+      .then((res) => {
+        if (!res.ok) throw new Error("Invalid token");
+        setIsVerified(true);
+      })
+      .catch(() => {
+        localStorage.removeItem("admin_token");
+        localStorage.removeItem("auth_token");
+        setLocation("/admin/login");
+      })
+      .finally(() => setIsChecking(false));
+  }, [setLocation]);
+
+  if (isChecking) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="text-center">
+          <div className="w-16 h-16 border-4 border-primary border-t-transparent rounded-full animate-spin mx-auto mb-4" />
+          <p className="text-muted-foreground">Verifying admin access...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!isVerified) return null;
+
+  return <>{children}</>;
+}
+
 function Router() {
   const { user, isLoading } = useAuth();
   const [location] = useLocation();
@@ -56,16 +100,21 @@ function Router() {
 
   // Admin routes - accessible without regular user authentication
   if (location.startsWith("/admin")) {
+    if (location === "/admin/login") {
+      return <AdminLoginPage />;
+    }
+    
     return (
-      <Switch>
-        <Route path="/admin/login" component={AdminLoginPage} />
-        <Route path="/admin/surety" component={SuretyDashboardPage} />
-        <Route path="/admin/exchange" component={InvestorExchangePage} />
-        <Route path="/admin/exchange/overview" component={InvestorOverviewPage} />
-        <Route path="/admin/exchange/auctions" component={InvestorExchangePage} />
-        <Route path="/admin/exchange/my-bids" component={InvestorMyBidsPage} />
-        <Route path="/admin" component={AdminPanelPage} />
-      </Switch>
+      <AdminAuthGuard>
+        <Switch>
+          <Route path="/admin/surety" component={SuretyDashboardPage} />
+          <Route path="/admin/exchange" component={InvestorExchangePage} />
+          <Route path="/admin/exchange/overview" component={InvestorOverviewPage} />
+          <Route path="/admin/exchange/auctions" component={InvestorExchangePage} />
+          <Route path="/admin/exchange/my-bids" component={InvestorMyBidsPage} />
+          <Route path="/admin" component={AdminPanelPage} />
+        </Switch>
+      </AdminAuthGuard>
     );
   }
 

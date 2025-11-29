@@ -58,6 +58,8 @@ export default function AdminPanelPage() {
 
   const handleLogout = () => {
     localStorage.removeItem("admin_token");
+    localStorage.removeItem("auth_token");
+    localStorage.removeItem("user");
     setLocation("/admin/login");
   };
 

@@ -32,6 +32,12 @@ export default function AdminLoginPage() {
 
       const data = await res.json();
       localStorage.setItem("admin_token", data.token);
+      localStorage.setItem("auth_token", data.token);
+      
+      // Store user data for auth context (same as regular login)
+      if (data.user) {
+        localStorage.setItem("user", JSON.stringify(data.user));
+      }
       
       toast({
         title: "Access granted",

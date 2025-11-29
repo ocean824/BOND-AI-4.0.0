@@ -1230,7 +1230,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const token = generateToken(adminUser);
-      res.json({ token });
+      
+      // Return user data (without password) along with token, same as regular login
+      const { password: _, ...userWithoutPassword } = adminUser;
+      res.json({ 
+        user: userWithoutPassword,
+        token 
+      });
     } catch (error) {
       console.error("Admin login error:", error);
       res.status(500).json({ message: "Authentication failed" });
