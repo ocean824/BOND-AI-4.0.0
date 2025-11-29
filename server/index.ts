@@ -5,7 +5,7 @@ import { validateConfig } from "./config";
 import { runMigrations } from 'stripe-replit-sync';
 import { getStripeSync } from './stripeClient';
 import { WebhookHandlers, setWebhookSecret } from './webhookHandlers';
-import { seedTestInvestor } from './seedTestInvestor';
+import { seedTestInvestor, seedAdminUser } from './seedTestInvestor';
 
 // Validate configuration before starting the server
 validateConfig();
@@ -125,6 +125,9 @@ app.use((req, res, next) => {
   
   // Seed test investor account with active subscription
   await seedTestInvestor();
+  
+  // Seed admin user account
+  await seedAdminUser();
   
   const server = await registerRoutes(app);
 
