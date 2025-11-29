@@ -5,6 +5,7 @@ import { validateConfig } from "./config";
 import { runMigrations } from 'stripe-replit-sync';
 import { getStripeSync } from './stripeClient';
 import { WebhookHandlers, setWebhookSecret } from './webhookHandlers';
+import { seedTestInvestor } from './seedTestInvestor';
 
 // Validate configuration before starting the server
 validateConfig();
@@ -121,6 +122,9 @@ app.use((req, res, next) => {
 (async () => {
   // Initialize Stripe before registering routes
   await initStripe();
+  
+  // Seed test investor account with active subscription
+  await seedTestInvestor();
   
   const server = await registerRoutes(app);
 
