@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
-import { Shield } from "lucide-react";
+import { Shield, TrendingUp, FileText } from "lucide-react";
 
 export default function LoginPage() {
   const [, setLocation] = useLocation();
@@ -67,7 +67,7 @@ export default function LoginPage() {
                 <Input
                   id="email"
                   type="email"
-                  placeholder="admin@bondai.app"
+                  placeholder="you@example.com"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   required
@@ -109,7 +109,24 @@ export default function LoginPage() {
           </form>
         </Card>
 
-        <p className="text-xs text-center text-muted-foreground mt-6">
+        <div className="mt-6 grid grid-cols-2 gap-3">
+          <div className="flex items-center gap-2 p-3 rounded-md bg-muted/50 border">
+            <FileText className="w-4 h-4 text-primary" />
+            <div className="text-xs">
+              <p className="font-medium">Analyst</p>
+              <p className="text-muted-foreground">Full platform</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 p-3 rounded-md bg-muted/50 border">
+            <TrendingUp className="w-4 h-4 text-primary" />
+            <div className="text-xs">
+              <p className="font-medium">Investor</p>
+              <p className="text-muted-foreground">Exchange only</p>
+            </div>
+          </div>
+        </div>
+
+        <p className="text-xs text-center text-muted-foreground mt-4">
           This platform provides AI-powered judgment analysis and pricing.
           <br />
           Not legal or investment advice.

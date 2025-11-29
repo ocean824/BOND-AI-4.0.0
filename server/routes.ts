@@ -50,6 +50,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     email: z.string().email(),
     password: z.string().min(6),
     name: z.string().min(1),
+    role: z.enum(["analyst", "investor"]).default("analyst"),
   });
 
   const loginSchema = z.object({
@@ -64,7 +65,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ error: "Invalid input", details: validation.error });
       }
 
-      const { email, password, name } = validation.data;
+      const { email, password, name, role } = validation.data;
 
       const existing = await storage.getUserByEmail(email);
       if (existing) {
@@ -76,7 +77,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         email,
         password: hashedPassword,
         name,
-        role: "analyst",
+        role,
       });
 
       const token = generateToken(user);
