@@ -23,7 +23,7 @@ type MenuItem = {
 };
 
 const mainMenuItems: MenuItem[] = [
-  { title: "Dashboard", url: "/", icon: Home, testId: "nav-dashboard" },
+  { title: "Dashboard", url: "/", icon: Home, testId: "nav-dashboard", roles: ["admin", "analyst"] },
   { title: "Judgments", url: "/judgments", icon: FileText, testId: "nav-judgments", roles: ["admin", "analyst"] },
   { title: "Bundles", url: "/bundles", icon: Package, testId: "nav-bundles", roles: ["admin", "analyst"] },
   { title: "Bonds", url: "/bonds", icon: Coins, testId: "nav-bonds", roles: ["admin", "analyst"] },

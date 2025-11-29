@@ -73,6 +73,22 @@ function Router() {
     );
   }
 
+  // INVESTOR GATE: Investors can ONLY access Bond Exchange routes
+  if (user.role === "investor") {
+    return (
+      <AuthenticatedLayout>
+        <Switch>
+          <Route path="/exchange/overview" component={InvestorOverviewPage} />
+          <Route path="/exchange/auctions" component={InvestorExchangePage} />
+          <Route path="/exchange/my-bids" component={InvestorMyBidsPage} />
+          <Route path="/" component={InvestorOverviewPage} />
+          <Route component={InvestorOverviewPage} />
+        </Switch>
+      </AuthenticatedLayout>
+    );
+  }
+
+  // Admin and Analyst routes - full platform access
   return (
     <AuthenticatedLayout>
       <Switch>
