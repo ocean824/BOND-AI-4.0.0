@@ -59,7 +59,7 @@ export default function InvestorMembershipPage() {
 
   const handleBack = async () => {
     await logout();
-    setLocation("/");
+    setLocation("/login");
   };
   const [selectedTier, setSelectedTier] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
@@ -9,8 +9,14 @@ import { useToast } from "@/hooks/use-toast";
 import { Shield, TrendingUp, FileText } from "lucide-react";
 
 export default function LoginPage() {
-  const [, setLocation] = useLocation();
-  const { login, isLoading: authLoading } = useAuth();
+  const [location, setLocation] = useLocation();
+  const { login, logout, isLoading: authLoading } = useAuth();
+
+  useEffect(() => {
+    if (location === "/login") {
+      logout();
+    }
+  }, [location, logout]);
   const { toast } = useToast();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");

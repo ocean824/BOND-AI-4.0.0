@@ -64,6 +64,11 @@ function Router() {
     );
   }
 
+  // Force login page route - clears session and shows login
+  if (location === "/login") {
+    return <LoginPage />;
+  }
+
   // Regular user routes
   if (!user) {
     return (
