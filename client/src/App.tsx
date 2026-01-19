@@ -20,6 +20,7 @@ import InvestorOverviewPage from "@/pages/investor-overview";
 import InvestorExchangePage from "@/pages/investor-exchange";
 import InvestorMyBidsPage from "@/pages/investor-my-bids";
 import InvestorMembershipPage from "@/pages/investor-membership";
+import InvestorDemoPage from "@/pages/investor-demo";
 import CheckoutSuccessPage from "@/pages/checkout-success";
 import AdminLoginPage from "@/pages/admin-login";
 import AdminPanelPage from "@/pages/admin-panel";
@@ -28,6 +29,7 @@ import AdminPinManagementPage from "@/pages/admin-pin-management";
 import AdminInvitesPage from "@/pages/admin-invites";
 import AdminLedgerPage from "@/pages/admin-ledger";
 import AdminUserDetailsPage from "@/pages/admin-user-details";
+import AdminAuditPage from "@/pages/admin-audit";
 import NotFound from "@/pages/not-found";
 
 function AuthenticatedLayout({ children }: { children: React.ReactNode }) {
@@ -120,6 +122,7 @@ function Router() {
           <Route path="/admin/invites" component={AdminInvitesPage} />
           <Route path="/admin/ledger" component={AdminLedgerPage} />
           <Route path="/admin/users/:id" component={AdminUserDetailsPage} />
+          <Route path="/admin/audit" component={AdminAuditPage} />
           <Route path="/admin" component={AdminPanelPage} />
         </Switch>
       </AdminAuthGuard>
@@ -173,6 +176,7 @@ function Router() {
           <Route path="/exchange/overview" component={InvestorOverviewPage} />
           <Route path="/exchange/auctions" component={InvestorExchangePage} />
           <Route path="/exchange/my-bids" component={InvestorMyBidsPage} />
+          <Route path="/exchange/demo" component={InvestorDemoPage} />
           <Route path="/" component={InvestorOverviewPage} />
           <Route component={InvestorOverviewPage} />
         </Switch>
@@ -194,6 +198,8 @@ function Router() {
         <Route path="/exchange/overview" component={InvestorOverviewPage} />
         <Route path="/exchange/auctions" component={InvestorExchangePage} />
         <Route path="/exchange/my-bids" component={InvestorMyBidsPage} />
+        <Route path="/exchange/demo" component={InvestorDemoPage} />
+        <Route path="/admin/audit" component={AdminAuditPage} />
         <Route component={NotFound} />
       </Switch>
     </AuthenticatedLayout>

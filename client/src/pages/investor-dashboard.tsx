@@ -103,10 +103,20 @@ export default function InvestorDashboardPage() {
             Comprehensive portfolio analytics and tranche breakdowns
           </p>
         </div>
-        <Badge variant="secondary" className="gap-2">
-          <Shield className="w-3 h-3" />
-          AI-Powered Analysis
-        </Badge>
+        <div className="flex items-center gap-3">
+          <Button
+            onClick={() => setLocation("/investor/exchange")}
+            className="gap-2"
+            data-testid="button-enter-exchange"
+          >
+            <TrendingUp className="w-4 h-4" />
+            Enter Bond Exchange
+          </Button>
+          <Badge variant="secondary" className="gap-2">
+            <Shield className="w-3 h-3" />
+            AI-Powered Analysis
+          </Badge>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">

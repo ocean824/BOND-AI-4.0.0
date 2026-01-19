@@ -325,19 +325,37 @@ export default function JudgmentsPage() {
                     <CardDescription>Data extracted using GPT-5 AI model</CardDescription>
                   </CardHeader>
                   <CardContent>
-                    <div className="bg-muted/50 rounded-lg p-4 space-y-2">
-                      <div className="flex items-center gap-2 mb-3">
-                        <Badge variant="secondary">AI Verified</Badge>
-                        <span className="text-xs text-muted-foreground">
-                          Confidence: 85%
-                        </span>
+                    {selectedJudgment.rawFields && Object.keys(selectedJudgment.rawFields as object).length > 0 ? (
+                      <div className="space-y-4">
+                        <div className="flex items-center gap-2 mb-3">
+                          <Badge variant="secondary">AI Verified</Badge>
+                          <span className="text-xs text-muted-foreground">
+                            Confidence: 85%
+                          </span>
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          {Object.entries(selectedJudgment.rawFields as Record<string, any>).map(([key, value]) => (
+                            <div key={key} className="bg-muted/50 rounded-lg p-3">
+                              <Label className="text-xs text-muted-foreground capitalize">
+                                {key.replace(/([A-Z])/g, ' $1').trim()}
+                              </Label>
+                              <p className="font-medium mt-1 text-sm">
+                                {typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value)}
+                              </p>
+                            </div>
+                          ))}
+                        </div>
                       </div>
-                      <p className="text-sm">
-                        AI extraction data will be displayed here when available. This includes
-                        debtor information, case details, and financial amounts extracted from
-                        uploaded PDF documents.
-                      </p>
-                    </div>
+                    ) : (
+                      <div className="bg-muted/50 rounded-lg p-4 space-y-2">
+                        <div className="flex items-center gap-2 mb-3">
+                          <Badge variant="outline">No Data</Badge>
+                        </div>
+                        <p className="text-sm text-muted-foreground">
+                          No AI extraction data available for this judgment. Upload a document to trigger AI extraction.
+                        </p>
+                      </div>
+                    )}
                   </CardContent>
                 </Card>
               </TabsContent>

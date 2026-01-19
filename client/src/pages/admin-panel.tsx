@@ -14,6 +14,13 @@ type AdminStats = {
   totalBundles: number;
   totalBonds: number;
   totalBondDocuments: number;
+  usersByRole?: {
+    admin: number;
+    analyst: number;
+    investor: number;
+    surety: number;
+    other: number;
+  };
 };
 
 export default function AdminPanelPage() {
@@ -177,19 +184,39 @@ export default function AdminPanelPage() {
                     <div className="text-2xl font-bold font-mono" data-testid={`stat-${stat.title.toLowerCase().replace(/\s+/g, '-')}`}>
                       {stat.value.toLocaleString()}
                     </div>
-                    {stat.title === "Total Users" && (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="w-full text-xs"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setLocation("/admin/user-details");
-                        }}
-                      >
-                        <Eye className="w-3 h-3 mr-1" />
-                        View Details (PIN)
-                      </Button>
+                    {stat.title === "Total Users" && stats?.usersByRole && (
+                      <div className="space-y-2">
+                        <div className="grid grid-cols-2 gap-2 text-xs">
+                          <div className="flex items-center justify-between">
+                            <span className="text-muted-foreground">Admin:</span>
+                            <span className="font-semibold">{stats.usersByRole.admin}</span>
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <span className="text-muted-foreground">Analyst:</span>
+                            <span className="font-semibold">{stats.usersByRole.analyst}</span>
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <span className="text-muted-foreground">Investor:</span>
+                            <span className="font-semibold">{stats.usersByRole.investor}</span>
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <span className="text-muted-foreground">Surety:</span>
+                            <span className="font-semibold">{stats.usersByRole.surety}</span>
+                          </div>
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="w-full text-xs"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setLocation("/admin/user-details");
+                          }}
+                        >
+                          <Eye className="w-3 h-3 mr-1" />
+                          View Details (PIN)
+                        </Button>
+                      </div>
                     )}
                   </div>
                 )}
@@ -260,7 +287,15 @@ export default function AdminPanelPage() {
             </CardContent>
           </Card>
 
-          <Card className="hover-elevate cursor-pointer" onClick={() => setLocation("/admin/audit")}>
+          <Card className="hover-elevate cursor-pointer" onClick={(e) => {
+            e.stopPropagation();
+            // PIN protection for audit access
+            const pin = prompt("Enter your admin PIN to access Audit & Compliance:");
+            if (pin) {
+              // TODO: Verify PIN via API
+              setLocation("/admin/audit");
+            }
+          }}>
             <CardHeader className="flex flex-row items-center justify-between gap-4 space-y-0">
               <div>
                 <CardTitle className="text-lg">Audit & Compliance</CardTitle>
@@ -278,7 +313,15 @@ export default function AdminPanelPage() {
             </CardContent>
           </Card>
 
-          <Card className="hover-elevate cursor-pointer" onClick={() => setLocation("/admin/ledger")}>
+          <Card className="hover-elevate cursor-pointer" onClick={(e) => {
+            e.stopPropagation();
+            // PIN protection for ledger access
+            const pin = prompt("Enter your admin PIN to access Ledger Entries:");
+            if (pin) {
+              // TODO: Verify PIN via API
+              setLocation("/admin/ledger");
+            }
+          }}>
             <CardHeader className="flex flex-row items-center justify-between gap-4 space-y-0">
               <div>
                 <CardTitle className="text-lg">Ledger Entries</CardTitle>
