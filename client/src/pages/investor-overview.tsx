@@ -1,8 +1,10 @@
+import { useLocation } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { TrendingUp, Clock, Calendar } from "lucide-react";
+import { TrendingUp, Clock, Calendar, ChevronLeft } from "lucide-react";
 
 type OverviewTotals = {
   totals: {
@@ -12,7 +14,8 @@ type OverviewTotals = {
   };
 };
 
-export default function InvestorOverview() {
+export default function InvestorOverviewPage() {
+  const [, setLocation] = useLocation();
   const { data, isLoading, error } = useQuery<OverviewTotals>({
     queryKey: ["/api/investor/overview"],
   });
@@ -50,6 +53,20 @@ export default function InvestorOverview() {
 
   return (
     <div className="p-6 space-y-6" data-testid="page-investor-overview">
+      {/* Back Navigation */}
+      <div className="flex items-center gap-2">
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => setLocation("/")}
+          className="gap-1 pl-0 hover:pl-1 transition-all"
+          data-testid="button-back"
+        >
+          <ChevronLeft className="w-4 h-4" />
+          Back to Dashboard
+        </Button>
+      </div>
+
       <div>
         <h1 className="text-2xl font-bold" data-testid="text-page-title">Bond Exchange Overview</h1>
         <p className="text-muted-foreground">

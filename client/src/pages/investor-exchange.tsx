@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -10,7 +11,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
 import { queryClient, apiRequest } from "@/lib/queryClient";
-import { Gavel, Clock, DollarSign } from "lucide-react";
+import { Gavel, Clock, DollarSign, ChevronLeft } from "lucide-react";
 
 type Auction = {
   id: number;
@@ -24,8 +25,9 @@ type AuctionsResponse = {
   auctions: Auction[];
 };
 
-export default function InvestorExchange() {
+export default function InvestorExchangePage() {
   const { toast } = useToast();
+  const [, setLocation] = useLocation();
   const [selectedAuction, setSelectedAuction] = useState<Auction | null>(null);
   const [bidAmount, setBidAmount] = useState("");
   const [bidDialogOpen, setBidDialogOpen] = useState(false);
@@ -118,6 +120,20 @@ export default function InvestorExchange() {
 
   return (
     <div className="p-6 space-y-6" data-testid="page-investor-exchange">
+      {/* Back Navigation */}
+      <div className="flex items-center gap-2">
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => setLocation("/exchange/overview")}
+          className="gap-1 pl-0 hover:pl-1 transition-all"
+          data-testid="button-back"
+        >
+          <ChevronLeft className="w-4 h-4" />
+          Back to Exchange Overview
+        </Button>
+      </div>
+
       <div>
         <h1 className="text-2xl font-bold" data-testid="text-page-title">Bond Exchange</h1>
         <p className="text-muted-foreground">

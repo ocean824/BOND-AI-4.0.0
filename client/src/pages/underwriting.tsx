@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -12,7 +13,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Plus, Trash2, DollarSign, TrendingUp, Shield, Users, FileText, Calculator } from "lucide-react";
+import { Plus, Trash2, DollarSign, TrendingUp, Shield, Users, FileText, Calculator, ChevronLeft } from "lucide-react";
 
 interface UnderwritingPartyInput {
   name: string;
@@ -72,6 +73,35 @@ interface UnderwritingMetrics {
   isCollectionGreaterThanClaim: boolean | null;
 }
 
+interface UnderwritingCase {
+  id: number;
+  title: string;
+  primaryDebtorName: string;
+  claimAmount: number;
+  baseBondAmount?: number | null;
+  attachedAssetsValue?: number | null;
+  vassaleesAnnualRevenue?: number | null;
+  riskManagementCoverage?: number | null;
+  finalNoticeToPerfectBondDate?: string | null;
+  secondFilingDate?: string | null;
+  creditBankingSummary?: string | null;
+  addressesSummary?: string | null;
+  licensesAndAssociationsSummary?: string | null;
+  realEstateSummary?: string | null;
+  appraisalSummary?: string | null;
+  highestBestUseSummary?: string | null;
+  loansAndLiensSummary?: string | null;
+  countyFilingsSummary?: string | null;
+  secretaryOfStateSummary?: string | null;
+  riskManagementNotes?: string | null;
+  canPlaceRealEstateLien?: boolean | null;
+  canPlaceBusinessLien?: boolean | null;
+  notes?: string | null;
+  status?: string;
+  createdAt?: Date;
+  updatedAt?: Date;
+}
+
 function computePreviewMetrics(caseInput: UnderwritingCaseInput, parties: UnderwritingPartyInput[]): UnderwritingMetrics {
   const claimAmount = Number(caseInput.claimAmount) || 0;
   const baseBondAmount = caseInput.baseBondAmount ? Number(caseInput.baseBondAmount) : null;
@@ -128,6 +158,7 @@ function computePreviewMetrics(caseInput: UnderwritingCaseInput, parties: Underw
 }
 
 export default function UnderwritingPage() {
+  const [, setLocation] = useLocation();
   const { toast } = useToast();
   const [activeView, setActiveView] = useState<"create" | "saved">("create");
 
@@ -139,7 +170,7 @@ export default function UnderwritingPage() {
 
   const [parties, setParties] = useState<UnderwritingPartyInput[]>([]);
 
-  const { data: savedCases = [] } = useQuery({
+  const { data: savedCases = [] } = useQuery<UnderwritingCase[]>({
     queryKey: ["/api/underwriting/cases"],
     enabled: activeView === "saved",
   });
@@ -190,6 +221,20 @@ export default function UnderwritingPage() {
   return (
     <div className="min-h-screen bg-background">
       <div className="p-6 max-w-7xl mx-auto space-y-6">
+        {/* Back Navigation */}
+        <div className="flex items-center gap-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setLocation("/")}
+            className="gap-1 pl-0 hover:pl-1 transition-all"
+            data-testid="button-back"
+          >
+            <ChevronLeft className="w-4 h-4" />
+            Back to Dashboard
+          </Button>
+        </div>
+
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-3xl font-bold tracking-tight">Underwriting</h1>

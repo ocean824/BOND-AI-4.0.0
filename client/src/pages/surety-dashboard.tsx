@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useLocation } from "wouter";
 import { useToast } from "@/hooks/use-toast";
 import {
   Card,
@@ -48,6 +49,7 @@ import {
   Plus,
   RefreshCw,
   Lock,
+  ChevronLeft,
 } from "lucide-react";
 
 type SuretyTrust = {
@@ -132,6 +134,7 @@ function formatCurrency(value: string | null): string {
 }
 
 export default function SuretyDashboardPage() {
+  const [, setLocation] = useLocation();
   const { toast } = useToast();
   const [pin, setPin] = useState<string>("");
   const [pinVerified, setPinVerified] = useState(false);
@@ -587,6 +590,20 @@ export default function SuretyDashboardPage() {
 
   return (
     <div className="container mx-auto py-6 space-y-6">
+      {/* Back Navigation */}
+      <div className="flex items-center gap-2">
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => setLocation("/")}
+          className="gap-1 pl-0 hover:pl-1 transition-all"
+          data-testid="button-back"
+        >
+          <ChevronLeft className="w-4 h-4" />
+          Back to Dashboard
+        </Button>
+      </div>
+
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold">Surety Bond Underwriting</h1>

@@ -1,10 +1,12 @@
+import { useLocation } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { History, DollarSign } from "lucide-react";
+import { History, DollarSign, ChevronLeft } from "lucide-react";
 
 type MyBid = {
   id: number;
@@ -17,7 +19,8 @@ type MyBidsResponse = {
   bids: MyBid[];
 };
 
-export default function InvestorMyBids() {
+export default function InvestorMyBidsPage() {
+  const [, setLocation] = useLocation();
   const { data, isLoading, error } = useQuery<MyBidsResponse>({
     queryKey: ["/api/investor/my-bids"],
   });
@@ -52,6 +55,20 @@ export default function InvestorMyBids() {
 
   return (
     <div className="p-6 space-y-6" data-testid="page-investor-my-bids">
+      {/* Back Navigation */}
+      <div className="flex items-center gap-2">
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => setLocation("/exchange/overview")}
+          className="gap-1 pl-0 hover:pl-1 transition-all"
+          data-testid="button-back"
+        >
+          <ChevronLeft className="w-4 h-4" />
+          Back to Exchange Overview
+        </Button>
+      </div>
+
       <div>
         <h1 className="text-2xl font-bold" data-testid="text-page-title">My Bids</h1>
         <p className="text-muted-foreground">
