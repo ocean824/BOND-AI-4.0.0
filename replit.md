@@ -52,6 +52,19 @@ The platform uses a React 18 frontend with Shadcn UI, an Express.js (TypeScript)
 *   **Distribution Service**: Bond interest/principal distribution to investors
 *   **Third-Party Integration Framework**: Adapter pattern for payment, banking, and custody providers
 
+### v3.2.0 Features (PIN & Invite System)
+
+*   **PIN-Based Access Control**:
+    - 6-digit PINs for sensitive admin actions
+    - Role-based PINs: admin (full access) vs surety (limited access)
+    - PIN access logging for audit trail
+    - Granular permissions system
+*   **Invite Code System**:
+    - Admin-generated invite codes for account creation
+    - Account type restrictions (analyst, investor, admin)
+    - Usage limits and expiration dates
+    - Tracking of code usage
+
 ### Technical Implementations
 *   **Frontend**: React 18, Vite, Shadcn UI (Radix UI + Tailwind CSS), TanStack Query, Wouter.
 *   **Backend**: Express.js, TypeScript, RESTful API, JWT, Zod validation, Drizzle ORM.

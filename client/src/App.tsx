@@ -24,6 +24,10 @@ import CheckoutSuccessPage from "@/pages/checkout-success";
 import AdminLoginPage from "@/pages/admin-login";
 import AdminPanelPage from "@/pages/admin-panel";
 import SuretyDashboardPage from "@/pages/surety-dashboard";
+import AdminPinManagementPage from "@/pages/admin-pin-management";
+import AdminInvitesPage from "@/pages/admin-invites";
+import AdminLedgerPage from "@/pages/admin-ledger";
+import AdminUserDetailsPage from "@/pages/admin-user-details";
 import NotFound from "@/pages/not-found";
 
 function AuthenticatedLayout({ children }: { children: React.ReactNode }) {
@@ -112,6 +116,10 @@ function Router() {
           <Route path="/admin/exchange/overview" component={InvestorOverviewPage} />
           <Route path="/admin/exchange/auctions" component={InvestorExchangePage} />
           <Route path="/admin/exchange/my-bids" component={InvestorMyBidsPage} />
+          <Route path="/admin/pins" component={AdminPinManagementPage} />
+          <Route path="/admin/invites" component={AdminInvitesPage} />
+          <Route path="/admin/ledger" component={AdminLedgerPage} />
+          <Route path="/admin/users/:id" component={AdminUserDetailsPage} />
           <Route path="/admin" component={AdminPanelPage} />
         </Switch>
       </AdminAuthGuard>
