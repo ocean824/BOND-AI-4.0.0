@@ -19,10 +19,11 @@ export default function JudgmentsPage() {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
   const [selectedJudgment, setSelectedJudgment] = useState<Judgment | null>(null);
+  const [activeTab, setActiveTab] = useState("details");
   const [showPricing, setShowPricing] = useState(false);
-  const [targetIRR, setTargetIRR] = useState("15");
+  const [targetIRR, setTargetIRR] = useState("10");
   const [discountRate, setDiscountRate] = useState("30");
-  const [expectedRecovery, setExpectedRecovery] = useState("60");
+  const [expectedRecovery, setExpectedRecovery] = useState("50");
 
   const { data: judgments, isLoading } = useQuery<Judgment[]>({
     queryKey: ["/api/judgments"],
@@ -227,7 +228,22 @@ export default function JudgmentsPage() {
                             <span className="text-sm font-mono font-semibold" data-testid={`judgment-amount-${judgment.id}`}>
                               ${parseFloat(judgment.judgmentAmount || "0").toLocaleString()}
                             </span>
-                            <FileText className="w-4 h-4 text-muted-foreground" />
+                            <FileText 
+                              className="w-4 h-4 text-muted-foreground cursor-pointer hover:text-primary transition-colors" 
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (judgment.documentUrl) {
+                                  window.open(judgment.documentUrl, '_blank');
+                                } else {
+                                  toast({
+                                    title: "No document",
+                                    description: "No document has been uploaded for this judgment",
+                                    variant: "destructive",
+                                  });
+                                }
+                              }}
+                              title="View uploaded document"
+                            />
                           </div>
                         </CardContent>
                       </Card>
@@ -247,7 +263,7 @@ export default function JudgmentsPage() {
 
         <div className="lg:col-span-2">
           {selectedJudgment ? (
-            <Tabs defaultValue="details" className="space-y-4">
+            <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
               <TabsList className="grid w-full grid-cols-3">
                 <TabsTrigger value="details" data-testid="tab-details">Details</TabsTrigger>
                 <TabsTrigger value="extraction" data-testid="tab-extraction">AI Extraction</TabsTrigger>

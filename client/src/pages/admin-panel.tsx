@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useLocation, Link } from "wouter";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Shield, Users, FileText, Package, Banknote, LogOut, Database, Settings, AlertCircle, Building2, TrendingUp, Gavel, ArrowRight } from "lucide-react";
+import { Shield, Users, FileText, Package, Banknote, LogOut, Database, Settings, AlertCircle, Building2, TrendingUp, Gavel, ArrowRight, Key, Eye } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { Skeleton } from "@/components/ui/skeleton";
 import { adminApiRequest } from "@/lib/adminQueryClient";
@@ -24,7 +24,7 @@ export default function AdminPanelPage() {
   useEffect(() => {
     const token = localStorage.getItem("admin_token");
     if (!token) {
-      setLocation("/admin/login");
+      setLocation("/");
       return;
     }
 
@@ -37,7 +37,7 @@ export default function AdminPanelPage() {
       })
       .catch(() => {
         localStorage.removeItem("admin_token");
-        setLocation("/admin/login");
+        setLocation("/");
       })
       .finally(() => {
         setIsChecking(false);
@@ -60,7 +60,7 @@ export default function AdminPanelPage() {
     localStorage.removeItem("admin_token");
     localStorage.removeItem("auth_token");
     localStorage.removeItem("user");
-    setLocation("/admin/login");
+    setLocation("/");
   };
 
   if (isChecking) {
@@ -173,8 +173,24 @@ export default function AdminPanelPage() {
                 {isLoading ? (
                   <Skeleton className="h-8 w-24" />
                 ) : (
-                  <div className="text-2xl font-bold font-mono" data-testid={`stat-${stat.title.toLowerCase().replace(/\s+/g, '-')}`}>
-                    {stat.value.toLocaleString()}
+                  <div className="space-y-2">
+                    <div className="text-2xl font-bold font-mono" data-testid={`stat-${stat.title.toLowerCase().replace(/\s+/g, '-')}`}>
+                      {stat.value.toLocaleString()}
+                    </div>
+                    {stat.title === "Total Users" && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="w-full text-xs"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setLocation("/admin/user-details");
+                        }}
+                      >
+                        <Eye className="w-3 h-3 mr-1" />
+                        View Details (PIN)
+                      </Button>
+                    )}
                   </div>
                 )}
               </CardContent>
@@ -239,6 +255,78 @@ export default function AdminPanelPage() {
             <CardContent>
               <Button variant="outline" className="w-full" data-testid="button-admin-exchange-overview">
                 <span>View Overview</span>
+                <ArrowRight className="w-4 h-4 ml-2" />
+              </Button>
+            </CardContent>
+          </Card>
+
+          <Card className="hover-elevate cursor-pointer" onClick={() => setLocation("/admin/audit")}>
+            <CardHeader className="flex flex-row items-center justify-between gap-4 space-y-0">
+              <div>
+                <CardTitle className="text-lg">Audit & Compliance</CardTitle>
+                <CardDescription>View audit logs and compliance reports</CardDescription>
+              </div>
+              <div className="flex items-center justify-center w-12 h-12 rounded-md bg-red-100 dark:bg-red-900/20">
+                <Shield className="w-6 h-6 text-red-600" />
+              </div>
+            </CardHeader>
+            <CardContent>
+              <Button variant="outline" className="w-full" data-testid="button-admin-audit">
+                <span>View Audit Logs</span>
+                <ArrowRight className="w-4 h-4 ml-2" />
+              </Button>
+            </CardContent>
+          </Card>
+
+          <Card className="hover-elevate cursor-pointer" onClick={() => setLocation("/admin/ledger")}>
+            <CardHeader className="flex flex-row items-center justify-between gap-4 space-y-0">
+              <div>
+                <CardTitle className="text-lg">Ledger Entries</CardTitle>
+                <CardDescription>View double-entry accounting ledger</CardDescription>
+              </div>
+              <div className="flex items-center justify-center w-12 h-12 rounded-md bg-purple-100 dark:bg-purple-900/20">
+                <Database className="w-6 h-6 text-purple-600" />
+              </div>
+            </CardHeader>
+            <CardContent>
+              <Button variant="outline" className="w-full" data-testid="button-admin-ledger">
+                <span>View Ledger</span>
+                <ArrowRight className="w-4 h-4 ml-2" />
+              </Button>
+            </CardContent>
+          </Card>
+
+          <Card className="hover-elevate cursor-pointer" onClick={() => setLocation("/admin/pin-management")}>
+            <CardHeader className="flex flex-row items-center justify-between gap-4 space-y-0">
+              <div>
+                <CardTitle className="text-lg">PIN Management</CardTitle>
+                <CardDescription>Generate and manage access PINs</CardDescription>
+              </div>
+              <div className="flex items-center justify-center w-12 h-12 rounded-md bg-orange-100 dark:bg-orange-900/20">
+                <Key className="w-6 h-6 text-orange-600" />
+              </div>
+            </CardHeader>
+            <CardContent>
+              <Button variant="outline" className="w-full" data-testid="button-admin-pins">
+                <span>Manage PINs</span>
+                <ArrowRight className="w-4 h-4 ml-2" />
+              </Button>
+            </CardContent>
+          </Card>
+
+          <Card className="hover-elevate cursor-pointer" onClick={() => setLocation("/admin/invites")}>
+            <CardHeader className="flex flex-row items-center justify-between gap-4 space-y-0">
+              <div>
+                <CardTitle className="text-lg">Invite Codes</CardTitle>
+                <CardDescription>Generate and manage invite codes</CardDescription>
+              </div>
+              <div className="flex items-center justify-center w-12 h-12 rounded-md bg-indigo-100 dark:bg-indigo-900/20">
+                <Users className="w-6 h-6 text-indigo-600" />
+              </div>
+            </CardHeader>
+            <CardContent>
+              <Button variant="outline" className="w-full" data-testid="button-admin-invites">
+                <span>Manage Invites</span>
                 <ArrowRight className="w-4 h-4 ml-2" />
               </Button>
             </CardContent>

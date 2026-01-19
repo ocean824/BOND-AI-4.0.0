@@ -436,6 +436,46 @@ export const stripeWebhooks = pgTable("stripe_webhooks", {
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
+// ===== v3.2.0 INVITE CODE SYSTEM =====
+export const inviteCodes = pgTable("invite_codes", {
+  id: serial("id").primaryKey(),
+  code: varchar("code", { length: 32 }).notNull().unique(),
+  accountType: varchar("account_type", { length: 20 }).notNull(), // 'analyst' | 'investor' | 'admin'
+  maxUses: integer("max_uses").notNull().default(1),
+  currentUses: integer("current_uses").notNull().default(0),
+  expiresAt: timestamp("expires_at", { withTimezone: true }),
+  createdBy: integer("created_by").references(() => users.id),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  isActive: boolean("is_active").notNull().default(true),
+  notes: text("notes"),
+});
+
+// ===== v3.2.0 PIN-BASED ACCESS CONTROL =====
+export const adminPins = pgTable("admin_pins", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").references(() => users.id),
+  pinHash: varchar("pin_hash", { length: 255 }).notNull(),
+  role: varchar("role", { length: 20 }).notNull(), // 'admin' | 'surety'
+  permissions: jsonb("permissions").notNull().default([]),
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+  expiresAt: timestamp("expires_at", { withTimezone: true }),
+  createdBy: integer("created_by").references(() => users.id),
+});
+
+export const pinAccessLogs = pgTable("pin_access_logs", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").references(() => users.id),
+  pinId: integer("pin_id").references(() => adminPins.id),
+  action: varchar("action", { length: 100 }).notNull(),
+  resource: varchar("resource", { length: 100 }).notNull(),
+  success: boolean("success").notNull(),
+  ipAddress: varchar("ip_address", { length: 45 }),
+  userAgent: text("user_agent"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
 // Relations
 export const usersRelations = relations(users, ({ many }) => ({
   judgments: many(judgments),
@@ -906,6 +946,24 @@ export const insertStripeWebhookSchema = createInsertSchema(stripeWebhooks).omit
   createdAt: true,
 });
 
+// v3.2.0 Invite codes insert schema
+export const insertInviteCodeSchema = createInsertSchema(inviteCodes).omit({
+  id: true,
+  createdAt: true,
+  currentUses: true,
+});
+
+// v3.2.0 PIN system insert schemas
+export const insertAdminPinSchema = createInsertSchema(adminPins).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertPinAccessLogSchema = createInsertSchema(pinAccessLogs).omit({
+  id: true,
+  createdAt: true,
+});
+
 // ===== REAL DATA VALIDATION SCHEMAS =====
 // These schemas enforce the "real data only" policy by requiring critical fields
 // and rejecting requests with incomplete data instead of allowing null/undefined values.
@@ -1036,6 +1094,17 @@ export type InsertImmutableEvent = z.infer<typeof insertImmutableEventSchema>;
 
 export type StripeWebhook = typeof stripeWebhooks.$inferSelect;
 export type InsertStripeWebhook = z.infer<typeof insertStripeWebhookSchema>;
+
+// v3.2.0 Invite codes types
+export type InviteCode = typeof inviteCodes.$inferSelect;
+export type InsertInviteCode = z.infer<typeof insertInviteCodeSchema>;
+
+// v3.2.0 PIN system types
+export type AdminPin = typeof adminPins.$inferSelect;
+export type InsertAdminPin = z.infer<typeof insertAdminPinSchema>;
+
+export type PinAccessLog = typeof pinAccessLogs.$inferSelect;
+export type InsertPinAccessLog = z.infer<typeof insertPinAccessLogSchema>;
 
 // Trade and assignment statuses
 export type TradeStatus = "PENDING" | "PAID" | "SETTLED" | "FAILED" | "CANCELLED";

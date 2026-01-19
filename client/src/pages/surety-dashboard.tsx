@@ -799,7 +799,7 @@ export default function SuretyDashboardPage() {
         <TabsContent value="cases" className="space-y-4">
           <Card>
             <CardHeader>
-              <CardTitle>Surety Cases</CardTitle>
+              <CardTitle>Cases/Bonds</CardTitle>
               <CardDescription>
                 All surety underwriting cases and their current status.
               </CardDescription>
@@ -807,7 +807,7 @@ export default function SuretyDashboardPage() {
             <CardContent>
               {cases.length === 0 ? (
                 <p className="text-center py-8 text-muted-foreground">
-                  No surety cases yet. Create one by running underwriting on a bond.
+                  No cases/bonds yet. Create one by running underwriting on a bond.
                 </p>
               ) : (
                 <Table>

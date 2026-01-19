@@ -34,6 +34,9 @@ import {
 } from "./services/documentEngineService";
 import { createTradeFromAuction } from "./services/tradeService";
 import { sendEmail, getEmailQueue, processEmailQueue } from "./services/documentEmailService";
+import { InviteCodeService } from "./services/inviteCodeService";
+import { PinService } from "./services/pinService";
+import { userDetailsPinMiddleware } from "./middleware/pinAuth";
 import { auctions, auctionBids, suretyTrusts, suretyCases, suretyCollateral, bondProcessDocuments, bonds } from "@shared/schema";
 import { eq, desc, and, lt, gt } from "drizzle-orm";
 import bcrypt from "bcryptjs";
@@ -54,6 +57,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     password: z.string().min(6),
     name: z.string().min(1),
     role: z.enum(["analyst", "investor"]).default("analyst"),
+    inviteCode: z.string().min(1, "Invite code is required"),
   });
 
   const loginSchema = z.object({
@@ -68,7 +72,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ error: "Invalid input", details: validation.error });
       }
 
-      const { email, password, name, role } = validation.data;
+      const { email, password, name, role, inviteCode } = validation.data;
+
+      // Validate invite code
+      const inviteValidation = await InviteCodeService.validateCode(inviteCode);
+      if (!inviteValidation.valid) {
+        return res.status(400).json({ error: inviteValidation.error || "Invalid invite code" });
+      }
+
+      // Check if account type matches
+      if (inviteValidation.accountType !== role) {
+        return res.status(400).json({ 
+          error: `This invite code is for ${inviteValidation.accountType} accounts only` 
+        });
+      }
 
       const existing = await storage.getUserByEmail(email);
       if (existing) {
@@ -82,6 +99,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         name,
         role,
       });
+
+      // Mark invite code as used
+      await InviteCodeService.useCode(inviteCode, user.id);
 
       const token = generateToken(user);
       res.json({ user: { ...user, password: undefined }, token });
@@ -3155,6 +3175,257 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Get investor distributions error:", error);
       res.status(500).json({ error: "Failed to get distributions" });
+    }
+  });
+
+  // ========================================
+  // INVITE CODE ENDPOINTS
+  // ========================================
+
+  // POST /api/admin/invite-codes - Generate new invite code
+  app.post("/api/admin/invite-codes", adminAuthMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const { accountType, maxUses, expiresInDays, notes } = req.body;
+      const result = await InviteCodeService.generateCode({
+        accountType,
+        maxUses: maxUses || 1,
+        expiresInDays,
+        createdBy: req.user!.id,
+        notes,
+      });
+      res.json(result);
+    } catch (error: any) {
+      console.error("Generate invite code error:", error);
+      res.status(500).json({ error: "Failed to generate invite code" });
+    }
+  });
+
+  // GET /api/admin/invite-codes - List all invite codes
+  app.get("/api/admin/invite-codes", adminAuthMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const codes = await InviteCodeService.listCodes();
+      res.json({ codes });
+    } catch (error) {
+      console.error("List invite codes error:", error);
+      res.status(500).json({ error: "Failed to fetch invite codes" });
+    }
+  });
+
+  // GET /api/admin/invite-codes/stats - Get invite code statistics
+  app.get("/api/admin/invite-codes/stats", adminAuthMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const stats = await InviteCodeService.getStats();
+      res.json(stats);
+    } catch (error) {
+      console.error("Get invite code stats error:", error);
+      res.status(500).json({ error: "Failed to fetch stats" });
+    }
+  });
+
+  // POST /api/admin/invite-codes/:id/deactivate - Deactivate an invite code
+  app.post("/api/admin/invite-codes/:id/deactivate", adminAuthMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const codeId = parseInt(req.params.id);
+      await InviteCodeService.deactivateCode(codeId);
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Deactivate invite code error:", error);
+      res.status(500).json({ error: "Failed to deactivate code" });
+    }
+  });
+
+  // POST /api/auth/validate-invite - Validate an invite code (public endpoint)
+  app.post("/api/auth/validate-invite", async (req, res) => {
+    try {
+      const { code } = req.body;
+      const result = await InviteCodeService.validateCode(code);
+      res.json(result);
+    } catch (error) {
+      console.error("Validate invite code error:", error);
+      res.status(500).json({ error: "Failed to validate invite code" });
+    }
+  });
+
+  // POST /api/admin/demo/seed - Seed demo data for testing
+  app.post("/api/admin/demo/seed", adminAuthMiddleware, async (req: AuthRequest, res) => {
+    try {
+      // Create sample judgment
+      const [judgment] = await db.insert(judgments).values({
+        debtorName: "Demo Debtor Corp",
+        caseNumber: "DEMO-2026-001",
+        judgmentAmount: "500000",
+        court: "Demo Superior Court",
+        jurisdiction: "California",
+        status: "active",
+        notes: "Demo judgment for testing",
+      }).returning();
+
+      // Create sample bond
+      const [bond] = await db.insert(bonds).values({
+        name: "Demo Bond 2026-A",
+        faceValue: "500000",
+        jurisdiction: "California",
+        status: "active",
+        bondScore: 75,
+        riskTier: "moderate",
+      }).returning();
+
+      // Create sample auction
+      const [auction] = await db.insert(auctions).values({
+        bondId: bond.id,
+        status: "active",
+        startsAt: new Date(),
+        endsAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+        reservePrice: "400000",
+      }).returning();
+
+      res.json({
+        message: "Demo data created successfully",
+        data: {
+          judgment: judgment.id,
+          bond: bond.id,
+          auction: auction.id,
+        },
+      });
+    } catch (error) {
+      console.error("Seed demo data error:", error);
+      res.status(500).json({ error: "Failed to seed demo data" });
+    }
+  });
+
+  // GET /api/admin/ledger/trial-balance - Get ledger trial balance
+  app.get("/api/admin/ledger/trial-balance", adminAuthMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const { LedgerService } = await import("./services/ledgerService");
+      const trialBalance = await LedgerService.getTrialBalance();
+      res.json(trialBalance);
+    } catch (error) {
+      console.error("Get trial balance error:", error);
+      res.status(500).json({ error: "Failed to get trial balance" });
+    }
+  });
+
+  // ===== PIN SYSTEM ROUTES =====
+  // POST /api/admin/verify-pin - Verify PIN for access
+  app.post("/api/admin/verify-pin", authMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const { pin, resource } = req.body;
+      
+      if (!pin) {
+        return res.status(400).json({ error: "PIN is required" });
+      }
+
+      const validation = await PinService.validatePin({
+        userId: req.user!.id,
+        pin,
+        action: "verify",
+        resource: resource || "admin",
+        ipAddress: req.ip,
+        userAgent: req.headers["user-agent"],
+      });
+
+      if (!validation.valid) {
+        return res.status(403).json({ error: validation.error || "Invalid PIN" });
+      }
+
+      res.json({
+        valid: true,
+        role: validation.role,
+        permissions: validation.permissions,
+      });
+    } catch (error) {
+      console.error("PIN verification error:", error);
+      res.status(500).json({ error: "PIN verification failed" });
+    }
+  });
+
+  // POST /api/admin/pins/generate - Generate new PIN (admin only)
+  app.post("/api/admin/pins/generate", adminAuthMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const { userId, role, expiresInDays } = req.body;
+
+      if (!userId || !role) {
+        return res.status(400).json({ error: "userId and role are required" });
+      }
+
+      if (role !== "admin" && role !== "surety") {
+        return res.status(400).json({ error: "Role must be 'admin' or 'surety'" });
+      }
+
+      const result = await PinService.createPin({
+        userId,
+        role,
+        createdBy: req.user!.id,
+        expiresInDays,
+      });
+
+      res.json({
+        message: "PIN generated successfully",
+        pin: result.pin,
+        pinId: result.pinId,
+        role,
+      });
+    } catch (error) {
+      console.error("Generate PIN error:", error);
+      res.status(500).json({ error: "Failed to generate PIN" });
+    }
+  });
+
+  // GET /api/admin/pins - List all PINs (admin only)
+  app.get("/api/admin/pins", adminAuthMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const pins = await PinService.listPins();
+      res.json({ pins });
+    } catch (error) {
+      console.error("List PINs error:", error);
+      res.status(500).json({ error: "Failed to list PINs" });
+    }
+  });
+
+  // POST /api/admin/pins/:id/deactivate - Deactivate a PIN (admin only)
+  app.post("/api/admin/pins/:id/deactivate", adminAuthMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const pinId = parseInt(req.params.id);
+      await PinService.deactivatePin(pinId);
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Deactivate PIN error:", error);
+      res.status(500).json({ error: "Failed to deactivate PIN" });
+    }
+  });
+
+  // GET /api/admin/users/details - Get detailed user list (requires PIN)
+  app.get("/api/admin/users/details", adminAuthMiddleware, userDetailsPinMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const usersResult = await db.execute(sql`
+        SELECT 
+          id,
+          username,
+          email,
+          role,
+          has_pin,
+          pin_role,
+          created_at
+        FROM users
+        ORDER BY created_at DESC
+      `);
+
+      res.json({ users: usersResult.rows });
+    } catch (error) {
+      console.error("Get user details error:", error);
+      res.status(500).json({ error: "Failed to get user details" });
+    }
+  });
+
+  // GET /api/admin/pin-logs - Get PIN access logs (admin only)
+  app.get("/api/admin/pin-logs", adminAuthMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const limit = req.query.limit ? parseInt(req.query.limit as string) : 100;
+      const logs = await PinService.getAccessLogs({ limit });
+      res.json({ logs });
+    } catch (error) {
+      console.error("Get PIN logs error:", error);
+      res.status(500).json({ error: "Failed to get PIN logs" });
     }
   });
 

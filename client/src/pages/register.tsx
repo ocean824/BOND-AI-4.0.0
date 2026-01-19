@@ -17,6 +17,7 @@ export default function RegisterPage() {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [inviteCode, setInviteCode] = useState("");
   const [accountType, setAccountType] = useState<"analyst" | "investor">("analyst");
   const [isLoading, setIsLoading] = useState(false);
 
@@ -33,7 +34,7 @@ export default function RegisterPage() {
     setIsLoading(true);
 
     try {
-      await register(email, password, name, accountType);
+      await register(email, password, name, accountType, inviteCode);
       toast({
         title: "Registration successful",
         description: accountType === "investor" 
@@ -159,6 +160,21 @@ export default function RegisterPage() {
                   minLength={6}
                   data-testid="input-password"
                 />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="inviteCode">Invite Code *</Label>
+                <Input
+                  id="inviteCode"
+                  type="text"
+                  placeholder="BOND-XXX-XXXXXX"
+                  value={inviteCode}
+                  onChange={(e) => setInviteCode(e.target.value)}
+                  required
+                  data-testid="input-invite-code"
+                />
+                <p className="text-xs text-muted-foreground">
+                  You need an invite code to create an account. Contact an administrator to get one.
+                </p>
               </div>
             </CardContent>
             <CardFooter className="flex flex-col gap-3">
