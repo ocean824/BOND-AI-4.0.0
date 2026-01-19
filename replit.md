@@ -33,6 +33,25 @@ The platform uses a React 18 frontend with Shadcn UI, an Express.js (TypeScript)
     - PDFs generated dynamically using bond data from database
     - Documents tracked in bondProcessDocuments table with status workflow (DRAFT → FINAL → SIGNED → ARCHIVED)
 
+### v3.0 Features (Manus AI Enhancements)
+
+*   **Compliance Infrastructure**: 
+    - KYC/AML Service with Persona, Onfido, Jumio, Sumsub integration support
+    - Accredited Investor Verification (Parallel Markets, VerifyInvestor, North Capital)
+    - Tax Reporting Service (W-9 forms, 1099 generation, Tax1099/Stripe Tax integration)
+    - Terms & Privacy Service with GDPR/CCPA compliance
+*   **Web3 & Blockchain Integration**:
+    - BAI Token (ERC-20) smart contract with vesting
+    - StakingVault for token-gating and auction participation
+    - BondNFT (ERC-721) for tokenized bond representation
+    - BondAuctionRegistry for on-chain bidding
+*   **Double-Entry Ledger System**: Full accounting ledger with journal entries and postings
+*   **Exchange Trade Settlement**: Complete trade lifecycle with Stripe payment processing
+*   **Immutable Event Log**: Blockchain-style event chain for audit trail
+*   **Auction Automation**: Automated auction lifecycle management
+*   **Distribution Service**: Bond interest/principal distribution to investors
+*   **Third-Party Integration Framework**: Adapter pattern for payment, banking, and custody providers
+
 ### Technical Implementations
 *   **Frontend**: React 18, Vite, Shadcn UI (Radix UI + Tailwind CSS), TanStack Query, Wouter.
 *   **Backend**: Express.js, TypeScript, RESTful API, JWT, Zod validation, Drizzle ORM.
