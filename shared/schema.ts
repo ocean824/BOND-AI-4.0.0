@@ -18,6 +18,14 @@ export const users = pgTable("users", {
   inviteCodeUsed: varchar("invite_code_used", { length: 32 }),
   inviteCodeAcceptedAt: timestamp("invite_code_accepted_at", { withTimezone: true }),
   termsAcceptedAt: timestamp("terms_accepted_at", { withTimezone: true }),
+  // KYC fields
+  kycVerified: boolean("kyc_verified").default(false),
+  kycVerificationId: varchar("kyc_verification_id", { length: 255 }),
+  kycVerifiedAt: timestamp("kyc_verified_at", { withTimezone: true }),
+  // Accredited investor fields
+  accreditedStatus: varchar("accredited_status", { length: 50 }),
+  accreditedVerifiedAt: timestamp("accredited_verified_at", { withTimezone: true }),
+  invitedAt: timestamp("invited_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
