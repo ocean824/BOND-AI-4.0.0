@@ -11,6 +11,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useToast } from "@/hooks/use-toast";
 import { Shield, TrendingUp, FileText } from "lucide-react";
+import { TermsAndConditionsContent } from "@/components/terms-and-conditions-content";
 
 export default function RegisterPage() {
   const [, setLocation] = useLocation();
@@ -218,109 +219,7 @@ export default function RegisterPage() {
                           </DialogDescription>
                         </DialogHeader>
                         <ScrollArea className="h-[60vh] pr-4">
-                          <div className="space-y-4 text-sm">
-                            <section>
-                              <h3 className="font-semibold text-base mb-2">1. Acceptance of Terms</h3>
-                              <p className="text-muted-foreground">
-                                By accessing and using the Judgment Bond AI platform ("Platform"), you agree to be bound by these Terms & Conditions. If you do not agree to these terms, you may not use the Platform.
-                              </p>
-                            </section>
-                            
-                            <section>
-                              <h3 className="font-semibold text-base mb-2">2. Platform Services</h3>
-                              <p className="text-muted-foreground">
-                                The Platform provides AI-powered judgment bond underwriting, valuation, and marketplace services. Services include but are not limited to: bond creation, AI analysis, auction management, and settlement processing.
-                              </p>
-                            </section>
-                            
-                            <section>
-                              <h3 className="font-semibold text-base mb-2">3. User Accounts</h3>
-                              <p className="text-muted-foreground">
-                                You are responsible for maintaining the confidentiality of your account credentials. You agree to notify us immediately of any unauthorized use of your account. You must be 18 years or older to create an account.
-                              </p>
-                            </section>
-                            
-                            <section>
-                              <h3 className="font-semibold text-base mb-2">4. Investor Accounts</h3>
-                              <p className="text-muted-foreground">
-                                Investor accounts require subscription payment and may be subject to accreditation verification. Investment in judgment bonds carries risk, and past performance does not guarantee future results. You acknowledge that you understand the risks involved.
-                              </p>
-                            </section>
-                            
-                            <section>
-                              <h3 className="font-semibold text-base mb-2">5. AI-Generated Content</h3>
-                              <p className="text-muted-foreground">
-                                AI-generated analyses, valuations, and recommendations are provided for informational purposes only and should not be considered as financial, legal, or investment advice. Users should conduct their own due diligence.
-                              </p>
-                            </section>
-                            
-                            <section>
-                              <h3 className="font-semibold text-base mb-2">6. Data Privacy</h3>
-                              <p className="text-muted-foreground">
-                                We collect and process personal data in accordance with our Privacy Policy. By using the Platform, you consent to such processing. We implement industry-standard security measures to protect your data.
-                              </p>
-                            </section>
-                            
-                            <section>
-                              <h3 className="font-semibold text-base mb-2">7. Payment Terms</h3>
-                              <p className="text-muted-foreground">
-                                All payments are processed securely through our payment partners (Stripe, JACE). Subscription fees are non-refundable except as required by law. Bond purchases are final upon settlement.
-                              </p>
-                            </section>
-                            
-                            <section>
-                              <h3 className="font-semibold text-base mb-2">8. Prohibited Activities</h3>
-                              <p className="text-muted-foreground">
-                                You may not: (a) use the Platform for illegal purposes; (b) attempt to gain unauthorized access; (c) interfere with Platform operations; (d) misrepresent information; or (e) violate any applicable laws or regulations.
-                              </p>
-                            </section>
-                            
-                            <section>
-                              <h3 className="font-semibold text-base mb-2">9. Intellectual Property</h3>
-                              <p className="text-muted-foreground">
-                                All Platform content, features, and functionality are owned by us and protected by copyright, trademark, and other intellectual property laws. You may not copy, modify, or distribute Platform content without permission.
-                              </p>
-                            </section>
-                            
-                            <section>
-                              <h3 className="font-semibold text-base mb-2">10. Limitation of Liability</h3>
-                              <p className="text-muted-foreground">
-                                TO THE MAXIMUM EXTENT PERMITTED BY LAW, WE SHALL NOT BE LIABLE FOR ANY INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, OR PUNITIVE DAMAGES ARISING FROM YOUR USE OF THE PLATFORM.
-                              </p>
-                            </section>
-                            
-                            <section>
-                              <h3 className="font-semibold text-base mb-2">11. Termination</h3>
-                              <p className="text-muted-foreground">
-                                We reserve the right to suspend or terminate your account at any time for violation of these terms or for any other reason. Upon termination, your right to use the Platform ceases immediately.
-                              </p>
-                            </section>
-                            
-                            <section>
-                              <h3 className="font-semibold text-base mb-2">12. Changes to Terms</h3>
-                              <p className="text-muted-foreground">
-                                We may modify these terms at any time. Continued use of the Platform after changes constitutes acceptance of the modified terms. We will notify users of material changes via email or Platform notification.
-                              </p>
-                            </section>
-                            
-                            <section>
-                              <h3 className="font-semibold text-base mb-2">13. Governing Law</h3>
-                              <p className="text-muted-foreground">
-                                These terms are governed by the laws of the State of Delaware, without regard to conflict of law principles. Any disputes shall be resolved through binding arbitration.
-                              </p>
-                            </section>
-                            
-                            <section>
-                              <h3 className="font-semibold text-base mb-2">14. Contact</h3>
-                              <p className="text-muted-foreground">
-                                For questions about these terms, please contact us at legal@judgmentbondai.com.
-                              </p>
-                            </section>
-                            
-                            <p className="text-xs text-muted-foreground mt-6">
-                              Last updated: January 23, 2026
-                            </p>
-                          </div>
+                          <TermsAndConditionsContent />
                         </ScrollArea>
                       </DialogContent>
                     </Dialog>
