@@ -19,7 +19,8 @@ export function PaymentMethodSelector({
   onPaymentMethodSelected,
   isLoading = false 
 }: PaymentMethodSelectorProps) {
-  const [selectedMethod, setSelectedMethod] = useState<"jace" | "stripe">("jace");
+  // Only Jace is shown to users, Stripe kept as backend fallback
+  const selectedMethod = "jace";
 
   const handleProceed = () => {
     onPaymentMethodSelected(selectedMethod);
@@ -37,77 +38,38 @@ export function PaymentMethodSelector({
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-6">
-        <RadioGroup value={selectedMethod} onValueChange={(value) => setSelectedMethod(value as "jace" | "stripe")}>
-          {/* JACE Payment - PRIMARY */}
-          <div className="relative">
-            <div className={`flex items-start space-x-4 rounded-lg border-2 p-4 transition-all ${
-              selectedMethod === "jace" 
-                ? "border-primary bg-primary/5" 
-                : "border-muted hover:border-muted-foreground/50"
-            }`}>
-              <RadioGroupItem value="jace" id="jace" className="mt-1" />
-              <div className="flex-1 space-y-2">
-                <div className="flex items-center gap-2">
-                  <Label htmlFor="jace" className="text-base font-semibold cursor-pointer">
-                    JACE Payment
-                  </Label>
-                  <Badge variant="default" className="bg-green-600">Recommended</Badge>
-                  <Badge variant="outline">Primary</Badge>
-                </div>
+        {/* Only show Jace payment option - Stripe kept as backend fallback */}
+        {/* JACE Payment - Only visible option */}
+        <div className="rounded-lg border-2 border-primary bg-primary/5 p-6">
+          <div className="space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="p-2 rounded-lg bg-primary/10">
+                <Wallet className="w-6 h-6 text-primary" />
+              </div>
+              <div className="flex-1">
+                <h3 className="text-lg font-semibold">JACE Payment</h3>
                 <p className="text-sm text-muted-foreground">
-                  Fast, secure payment processing with instant settlement. Preferred method for bond purchases.
+                  Fast, secure payment processing with instant settlement
                 </p>
-                <div className="flex items-center gap-4 text-xs text-muted-foreground">
-                  <div className="flex items-center gap-1">
-                    <CheckCircle className="w-3 h-3 text-green-600" />
-                    <span>Instant confirmation</span>
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <CheckCircle className="w-3 h-3 text-green-600" />
-                    <span>Lower fees</span>
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <CheckCircle className="w-3 h-3 text-green-600" />
-                    <span>KYC integrated</span>
-                  </div>
-                </div>
+              </div>
+              <Badge variant="default" className="bg-green-600">Secure</Badge>
+            </div>
+            <div className="grid grid-cols-3 gap-4 pt-2">
+              <div className="flex items-center gap-2 text-sm">
+                <CheckCircle className="w-4 h-4 text-green-600" />
+                <span className="text-muted-foreground">Instant confirmation</span>
+              </div>
+              <div className="flex items-center gap-2 text-sm">
+                <CheckCircle className="w-4 h-4 text-green-600" />
+                <span className="text-muted-foreground">Lower fees</span>
+              </div>
+              <div className="flex items-center gap-2 text-sm">
+                <CheckCircle className="w-4 h-4 text-green-600" />
+                <span className="text-muted-foreground">KYC integrated</span>
               </div>
             </div>
           </div>
-
-          {/* Stripe Payment - FALLBACK */}
-          <div className="relative">
-            <div className={`flex items-start space-x-4 rounded-lg border-2 p-4 transition-all ${
-              selectedMethod === "stripe" 
-                ? "border-primary bg-primary/5" 
-                : "border-muted hover:border-muted-foreground/50"
-            }`}>
-              <RadioGroupItem value="stripe" id="stripe" className="mt-1" />
-              <div className="flex-1 space-y-2">
-                <div className="flex items-center gap-2">
-                  <Label htmlFor="stripe" className="text-base font-semibold cursor-pointer flex items-center gap-2">
-                    <CreditCard className="w-4 h-4" />
-                    Credit/Debit Card (Stripe)
-                  </Label>
-                  <Badge variant="secondary">Alternative</Badge>
-                </div>
-                <p className="text-sm text-muted-foreground">
-                  Traditional card payment through Stripe. Available as a backup option.
-                </p>
-                <div className="flex items-center gap-4 text-xs text-muted-foreground">
-                  <div className="flex items-center gap-1">
-                    <CheckCircle className="w-3 h-3 text-blue-600" />
-                    <span>All major cards</span>
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <CheckCircle className="w-3 h-3 text-blue-600" />
-                    <span>Secure</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </RadioGroup>
+        </div>
 
         <div className="flex gap-3">
           <Button 
@@ -116,7 +78,7 @@ export function PaymentMethodSelector({
             className="flex-1"
             size="lg"
           >
-            {isLoading ? "Processing..." : `Proceed with ${selectedMethod === "jace" ? "JACE" : "Stripe"} Payment`}
+            {isLoading ? "Processing..." : "Proceed with JACE Payment"}
           </Button>
         </div>
 
