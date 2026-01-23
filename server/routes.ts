@@ -1113,7 +1113,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         bond, 
         { 
           purpose: `Refine the following draft based on these instructions: ${instructions}\n\nExisting draft:\n${draft}`,
-          style: "formal"
+          style: "term_sheet"
         }
       );
       
@@ -3110,7 +3110,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Transform to AuditLog format expected by UI
       const logs = events.map(event => ({
         id: event.id,
-        userId: event.userId || 0,
+        userId: event.actorId || 0,
         action: event.eventType,
         resource: event.entityType,
         details: event.payload,

@@ -1,4 +1,4 @@
-import { Home, FileText, Package, Coins, TrendingUp, Shield, Gavel, History, BarChart3, LogOut, Scale } from "lucide-react";
+import { Home, FileText, Package, Coins, TrendingUp, Shield, Gavel, History, BarChart3, LogOut, Scale, Briefcase } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import {
   Sidebar,
@@ -36,6 +36,7 @@ const exchangeMenuItems: MenuItem[] = [
   { title: "Exchange Overview", url: "/exchange/overview", icon: BarChart3, testId: "nav-exchange-overview", roles: ["admin", "investor"] },
   { title: "Active Auctions", url: "/exchange/auctions", icon: Gavel, testId: "nav-exchange-auctions", roles: ["admin", "investor"] },
   { title: "My Bids", url: "/exchange/my-bids", icon: History, testId: "nav-exchange-my-bids", roles: ["admin", "investor"] },
+  { title: "My Holdings", url: "/exchange/holdings", icon: Briefcase, testId: "nav-exchange-holdings", roles: ["admin", "investor"] },
 ];
 
 export function AppSidebar() {

@@ -19,6 +19,7 @@ import UnderwritingPage from "@/pages/underwriting";
 import InvestorOverviewPage from "@/pages/investor-overview";
 import InvestorExchangePage from "@/pages/investor-exchange";
 import InvestorMyBidsPage from "@/pages/investor-my-bids";
+import InvestorHoldingsPage from "@/pages/investor-holdings";
 import InvestorMembershipPage from "@/pages/investor-membership";
 import InvestorDemoPage from "@/pages/investor-demo";
 import CheckoutSuccessPage from "@/pages/checkout-success";
@@ -176,6 +177,7 @@ function Router() {
           <Route path="/exchange/overview" component={InvestorOverviewPage} />
           <Route path="/exchange/auctions" component={InvestorExchangePage} />
           <Route path="/exchange/my-bids" component={InvestorMyBidsPage} />
+          <Route path="/exchange/holdings" component={InvestorHoldingsPage} />
           <Route path="/exchange/demo" component={InvestorDemoPage} />
           <Route path="/" component={InvestorOverviewPage} />
           <Route component={InvestorOverviewPage} />
@@ -198,6 +200,7 @@ function Router() {
         <Route path="/exchange/overview" component={InvestorOverviewPage} />
         <Route path="/exchange/auctions" component={InvestorExchangePage} />
         <Route path="/exchange/my-bids" component={InvestorMyBidsPage} />
+        <Route path="/exchange/holdings" component={InvestorHoldingsPage} />
         <Route path="/exchange/demo" component={InvestorDemoPage} />
         <Route path="/admin/audit" component={AdminAuditPage} />
         <Route component={NotFound} />
