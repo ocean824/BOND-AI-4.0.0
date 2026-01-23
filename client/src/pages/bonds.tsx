@@ -1,5 +1,5 @@
 // client/src/pages/bonds.tsx
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useLocation } from "wouter";
 import { useAuth } from "@/lib/auth";
 import { useToast } from "@/hooks/use-toast";
@@ -175,6 +175,10 @@ export default function BondsPage() {
   const [selectedStep, setSelectedStep] = useState("");
   const [generatingDocs, setGeneratingDocs] = useState(false);
   const [bondProcessDocs, setBondProcessDocs] = useState<BondProcessDoc[]>([]);
+  
+  // Draft autosave state
+  const [draftSaveStatus, setDraftSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const draftTimeoutRef = useRef<NodeJS.Timeout>();
 
   function authHeaders(): HeadersInit {
     const token = localStorage.getItem("auth_token");
@@ -239,6 +243,59 @@ export default function BondsPage() {
       void loadProcessSteps();
     }
   }, []);
+
+  // Load draft when bond is selected
+  useEffect(() => {
+    if (selectedBond) {
+      fetch(`/api/bonds/${selectedBond.id}/draft`, {
+        headers: authHeaders(),
+      })
+        .then(res => res.json())
+        .then(data => {
+          if (data.draft) {
+            setDraft(data.draft);
+          }
+        })
+        .catch(console.error);
+    }
+  }, [selectedBond?.id]);
+
+  // Autosave draft with debounce
+  useEffect(() => {
+    if (!selectedBond || !draft) return;
+    
+    setDraftSaveStatus("saving");
+    
+    // Clear existing timeout
+    if (draftTimeoutRef.current) {
+      clearTimeout(draftTimeoutRef.current);
+    }
+    
+    // Set new timeout
+    draftTimeoutRef.current = setTimeout(async () => {
+      try {
+        await fetch(`/api/bonds/${selectedBond.id}/draft`, {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+            ...authHeaders(),
+          },
+          body: JSON.stringify({ draft }),
+        });
+        setDraftSaveStatus("saved");
+        setTimeout(() => setDraftSaveStatus("idle"), 2000);
+      } catch (error) {
+        setDraftSaveStatus("error");
+        console.error("Failed to save draft:", error);
+      }
+    }, 1000); // 1 second debounce
+    
+    return () => {
+      if (draftTimeoutRef.current) {
+        clearTimeout(draftTimeoutRef.current);
+      }
+    };
+  }, [draft, selectedBond?.id]);
 
   async function loadProcessSteps() {
     try {
@@ -963,6 +1020,13 @@ export default function BondsPage() {
                     onChange={(e) => setDraft(e.target.value)}
                     placeholder="AI-generated draft will appear here. Always have qualified counsel review before use."
                   />
+                  {draftSaveStatus !== "idle" && (
+                    <div className="text-xs text-muted-foreground mt-1">
+                      {draftSaveStatus === "saving" && "💾 Saving..."}
+                      {draftSaveStatus === "saved" && "✓ Saved"}
+                      {draftSaveStatus === "error" && "⚠ Save failed"}
+                    </div>
+                  )}
                 </div>
 
                 <div className="space-y-3 border-t pt-3">

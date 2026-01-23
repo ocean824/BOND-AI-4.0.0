@@ -108,6 +108,11 @@ export const bonds = pgTable("bonds", {
   suretyStatus: varchar("surety_status", { length: 50 }).default("NONE"), // NONE | IN_UNDERWRITING | APPROVED | DECLINED
   
   status: varchar("status", { length: 50 }).notNull().default("draft"),
+  
+  // Draft document fields
+  draftDocument: text("draft_document"),
+  draftUpdatedAt: timestamp("draft_updated_at", { withTimezone: true }),
+  
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });

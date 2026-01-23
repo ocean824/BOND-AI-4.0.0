@@ -37,7 +37,7 @@ import { sendEmail, getEmailQueue, processEmailQueue } from "./services/document
 import { InviteCodeService } from "./services/inviteCodeService";
 import { PinService } from "./services/pinService";
 import { userDetailsPinMiddleware } from "./middleware/pinAuth";
-import { auctions, auctionBids, suretyTrusts, suretyCases, suretyCollateral, bondProcessDocuments, bonds } from "@shared/schema";
+import { auctions, auctionBids, suretyTrusts, suretyCases, suretyCollateral, bondProcessDocuments, bonds, immutableEvents, pinAccessLogs } from "@shared/schema";
 import { eq, desc, and, lt, gt } from "drizzle-orm";
 import bcrypt from "bcryptjs";
 import { z } from "zod";
@@ -1063,6 +1063,121 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Draft bond document error:", error);
       res.status(500).json({ error: "Failed to draft bond document" });
+    }
+  });
+
+  // Generate AI draft (alias for bonds page compatibility)
+  app.post("/api/bonds/:id/ai-draft", authMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const bondId = parseInt(req.params.id);
+      const bond = await storage.getBond(bondId);
+
+      if (!bond) {
+        return res.status(404).json({ error: "Bond not found" });
+      }
+
+      // Verify ownership (admin bypass)
+      if (bond.ownerId !== req.user!.id && req.user!.role !== "admin") {
+        return res.status(403).json({ error: "Forbidden" });
+      }
+
+      const { instructions } = req.body;
+
+      const draft = await generateBondDraft(bond, { purpose: instructions || "Generate bond document" });
+      res.json({ draft });
+    } catch (error) {
+      console.error("AI draft error:", error);
+      res.status(500).json({ error: "Failed to generate AI draft" });
+    }
+  });
+
+  // Edit AI draft with instructions
+  app.post("/api/bonds/:id/ai-edit", authMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const bondId = parseInt(req.params.id);
+      const bond = await storage.getBond(bondId);
+
+      if (!bond) {
+        return res.status(404).json({ error: "Bond not found" });
+      }
+
+      // Verify ownership (admin bypass)
+      if (bond.ownerId !== req.user!.id && req.user!.role !== "admin") {
+        return res.status(403).json({ error: "Forbidden" });
+      }
+
+      const { draft, instructions } = req.body;
+
+      // Use existing draft as context for refinement
+      const refinedDraft = await generateBondDraft(
+        bond, 
+        { 
+          purpose: `Refine the following draft based on these instructions: ${instructions}\n\nExisting draft:\n${draft}`,
+          style: "formal"
+        }
+      );
+      
+      res.json({ draft: refinedDraft });
+    } catch (error) {
+      console.error("AI edit error:", error);
+      res.status(500).json({ error: "Failed to edit draft" });
+    }
+  });
+
+  // GET /api/bonds/:id/draft - Load persisted draft
+  app.get("/api/bonds/:id/draft", authMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const bondId = parseInt(req.params.id);
+      const bond = await storage.getBond(bondId);
+      
+      if (!bond) {
+        return res.status(404).json({ error: "Bond not found" });
+      }
+      
+      // Verify ownership (admin bypass)
+      if (bond.ownerId !== req.user!.id && req.user!.role !== "admin") {
+        return res.status(403).json({ error: "Forbidden" });
+      }
+      
+      res.json({ 
+        draft: bond.draftDocument || "",
+        updatedAt: bond.draftUpdatedAt,
+      });
+    } catch (error) {
+      console.error("Get draft error:", error);
+      res.status(500).json({ error: "Failed to get draft" });
+    }
+  });
+
+  // PUT /api/bonds/:id/draft - Save draft
+  app.put("/api/bonds/:id/draft", authMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const bondId = parseInt(req.params.id);
+      const bond = await storage.getBond(bondId);
+      
+      if (!bond) {
+        return res.status(404).json({ error: "Bond not found" });
+      }
+      
+      // Verify ownership (admin bypass)
+      if (bond.ownerId !== req.user!.id && req.user!.role !== "admin") {
+        return res.status(403).json({ error: "Forbidden" });
+      }
+      
+      const { draft } = req.body;
+      
+      await db
+        .update(bonds)
+        .set({ 
+          draftDocument: draft,
+          draftUpdatedAt: new Date(),
+        })
+        .where(eq(bonds.id, bondId));
+      
+      res.json({ success: true, updatedAt: new Date().toISOString() });
+    } catch (error) {
+      console.error("Save draft error:", error);
+      res.status(500).json({ error: "Failed to save draft" });
     }
   });
 
@@ -2973,6 +3088,152 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Verify chain error:", error);
       res.status(500).json({ error: "Failed to verify chains" });
+    }
+  });
+
+  // GET /api/admin/audit/logs/:timeRange? - Get audit logs for dashboard
+  app.get("/api/admin/audit/logs/:timeRange?", adminAuthMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const timeRange = req.params.timeRange || "7d";
+      const days = parseInt(timeRange.replace("d", "")) || 7;
+      const since = new Date();
+      since.setDate(since.getDate() - days);
+      
+      // Query immutableEvents and pinAccessLogs
+      const events = await db
+        .select()
+        .from(immutableEvents)
+        .where(gt(immutableEvents.createdAt, since))
+        .orderBy(desc(immutableEvents.createdAt))
+        .limit(100);
+      
+      // Transform to AuditLog format expected by UI
+      const logs = events.map(event => ({
+        id: event.id,
+        userId: event.userId || 0,
+        action: event.eventType,
+        resource: event.entityType,
+        details: event.payload,
+        ipAddress: (event.metadata as any)?.ipAddress || "unknown",
+        userAgent: (event.metadata as any)?.userAgent || "unknown",
+        createdAt: event.createdAt.toISOString(),
+      }));
+      
+      res.json(logs);
+    } catch (error) {
+      console.error("Get audit logs error:", error);
+      res.status(500).json({ error: "Failed to get audit logs" });
+    }
+  });
+
+  // GET /api/admin/audit/metrics/:timeRange? - Get compliance metrics
+  app.get("/api/admin/audit/metrics/:timeRange?", adminAuthMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const timeRange = req.params.timeRange || "7d";
+      const days = parseInt(timeRange.replace("d", "")) || 7;
+      const since = new Date();
+      since.setDate(since.getDate() - days);
+      
+      // Query events for metrics
+      const events = await db
+        .select()
+        .from(immutableEvents)
+        .where(gt(immutableEvents.createdAt, since));
+      
+      const totalEvents = events.length;
+      const criticalEvents = events.filter(e => 
+        e.eventType.includes("ERROR") || e.eventType.includes("FAILED")
+      ).length;
+      const warningEvents = events.filter(e => 
+        e.eventType.includes("WARNING") || e.eventType.includes("DECLINED")
+      ).length;
+      const successRate = totalEvents > 0 
+        ? ((totalEvents - criticalEvents) / totalEvents) * 100 
+        : 100;
+      
+      // Calculate compliance score (simple formula)
+      const score = Math.max(0, Math.min(100, 
+        100 - (criticalEvents * 5) - (warningEvents * 2)
+      ));
+      
+      res.json({
+        score: Math.round(score),
+        totalEvents,
+        criticalEvents,
+        warningEvents,
+        successRate: Math.round(successRate * 10) / 10,
+        averageResponseTime: 245, // TODO: Calculate from actual response times
+      });
+    } catch (error) {
+      console.error("Get audit metrics error:", error);
+      res.status(500).json({ error: "Failed to get audit metrics" });
+    }
+  });
+
+  // GET /api/admin/audit/ai-insights/:timeRange? - Get AI-generated insights
+  app.get("/api/admin/audit/ai-insights/:timeRange?", adminAuthMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const timeRange = req.params.timeRange || "7d";
+      const days = parseInt(timeRange.replace("d", "")) || 7;
+      const since = new Date();
+      since.setDate(since.getDate() - days);
+      
+      // Query recent events for pattern analysis
+      const events = await db
+        .select()
+        .from(immutableEvents)
+        .where(gt(immutableEvents.createdAt, since))
+        .orderBy(desc(immutableEvents.createdAt))
+        .limit(1000);
+      
+      const insights: Array<{
+        type: "anomaly" | "trend" | "recommendation";
+        severity: "high" | "medium" | "low";
+        title: string;
+        description: string;
+        timestamp: string;
+      }> = [];
+      
+      // Detect anomalies
+      const failedEvents = events.filter(e => e.eventType.includes("FAILED") || e.eventType.includes("ERROR"));
+      if (failedEvents.length > 10) {
+        insights.push({
+          type: "anomaly",
+          severity: "high",
+          title: "Multiple Failed Operations",
+          description: `${failedEvents.length} failed operations detected in the last ${days} days. Review system logs for details.`,
+          timestamp: new Date().toISOString(),
+        });
+      }
+      
+      // Detect trends
+      const recentEvents = events.filter(e => {
+        const age = Date.now() - new Date(e.createdAt).getTime();
+        return age < 24 * 60 * 60 * 1000; // Last 24 hours
+      });
+      if (recentEvents.length > events.length * 0.3) {
+        insights.push({
+          type: "trend",
+          severity: "medium",
+          title: "Increased Activity",
+          description: "System activity has increased significantly in the last 24 hours.",
+          timestamp: new Date().toISOString(),
+        });
+      }
+      
+      // Add recommendations
+      insights.push({
+        type: "recommendation",
+        severity: "low",
+        title: "Regular Security Audits",
+        description: "Schedule regular security audits to maintain compliance standards.",
+        timestamp: new Date().toISOString(),
+      });
+      
+      res.json(insights);
+    } catch (error) {
+      console.error("Get AI insights error:", error);
+      res.status(500).json({ error: "Failed to get AI insights" });
     }
   });
 

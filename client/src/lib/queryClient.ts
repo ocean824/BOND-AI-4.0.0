@@ -8,10 +8,24 @@ async function throwIfResNotOk(res: Response) {
 }
 
 export async function apiRequest(
-  method: string,
-  url: string,
+  methodOrUrl: string,
+  urlOrMethod: string,
   data?: unknown | undefined,
 ): Promise<Response> {
+  // Support both (method, url, data) and (url, method, data) for backward compatibility
+  let method: string;
+  let url: string;
+  
+  if (methodOrUrl.startsWith("/api/")) {
+    // Old style: (url, method, data)
+    url = methodOrUrl;
+    method = urlOrMethod;
+  } else {
+    // New style: (method, url, data)
+    method = methodOrUrl;
+    url = urlOrMethod;
+  }
+  
   const headers: Record<string, string> = data ? { "Content-Type": "application/json" } : {};
   
   // Check for admin token first, then regular user token
