@@ -37,7 +37,8 @@ import { sendEmail, getEmailQueue, processEmailQueue } from "./services/document
 import { InviteCodeService } from "./services/inviteCodeService";
 import { PinService } from "./services/pinService";
 import { userDetailsPinMiddleware } from "./middleware/pinAuth";
-import { auctions, auctionBids, suretyTrusts, suretyCases, suretyCollateral, bondProcessDocuments, bonds, immutableEvents, pinAccessLogs } from "@shared/schema";
+import { ingestJaceWebhook, sendInvestorOnboardingToJace, verifyJaceSignature } from "./services/jaceIntegrationService";
+import { auctions, auctionBids, suretyTrusts, suretyCases, suretyCollateral, bondProcessDocuments, bonds, immutableEvents, pinAccessLogs, exchangeTrades } from "@shared/schema";
 import { eq, desc, and, lt, gt } from "drizzle-orm";
 import bcrypt from "bcryptjs";
 import { z } from "zod";
@@ -2873,6 +2874,114 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // ===== JACE INTEGRATION ROUTES =====
+  
+  // POST /api/investor/trades/:id/jace/session - Create JACE checkout session (Option B: after onboarding)
+  app.post("/api/investor/trades/:id/jace/session", investorAuthMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const tradeId = Number(req.params.id);
+      if (!tradeId) return res.status(400).json({ error: "Invalid trade ID" });
+
+      const [trade] = await db
+        .select({
+          id: exchangeTrades.id,
+          investorId: exchangeTrades.investorId,
+          status: exchangeTrades.status,
+          onboardingStatus: exchangeTrades.onboardingStatus,
+          jaceSessionId: exchangeTrades.jaceSessionId,
+          jaceSessionStatus: exchangeTrades.jaceSessionStatus,
+        })
+        .from(exchangeTrades)
+        .where(and(eq(exchangeTrades.id, tradeId), eq(exchangeTrades.investorId, req.user?.id || 0)));
+
+      if (!trade) return res.status(404).json({ error: "Trade not found" });
+
+      if (trade.onboardingStatus !== "COMPLETED") {
+        return res.status(409).json({
+          error: "Onboarding must be completed before checkout session can be created",
+          next: `/exchange/jace-onboarding?tradeId=${tradeId}`,
+        });
+      }
+
+      // If a session already exists and isn't paid, reuse it.
+      let sessionId = trade.jaceSessionId;
+      let sessionStatus = trade.jaceSessionStatus;
+
+      if (!sessionId || sessionStatus === "NOT_CREATED") {
+        sessionId = `jace_mock_${crypto.randomUUID()}`;  
+        sessionStatus = "CREATED";
+
+        await db
+          .update(exchangeTrades)
+          .set({
+            jaceSessionId: sessionId,
+            jaceSessionStatus: sessionStatus,
+            updatedAt: new Date(),
+          } as any)
+          .where(eq(exchangeTrades.id, tradeId));
+      }
+
+      const checkoutUrl = `/exchange/jace-checkout?tradeId=${tradeId}&sessionId=${encodeURIComponent(sessionId)}`;
+
+      res.json({ ok: true, tradeId, sessionId, sessionStatus, checkoutUrl });
+    } catch (error) {
+      console.error("Create JACE session error:", error);
+      res.status(500).json({ error: "Failed to create JACE session" });
+    }
+  });
+
+  // POST /api/investor/jace/mock/complete - Mock JACE checkout completion (fires internal JACE webhook ingest)
+  app.post("/api/investor/jace/mock/complete", investorAuthMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const tradeId = Number(req.body?.tradeId);
+      const sessionId = String(req.body?.sessionId || "");
+      if (!tradeId || !sessionId) {
+        return res.status(400).json({ error: "tradeId and sessionId are required" });
+      }
+
+      const [trade] = await db
+        .select({
+          id: exchangeTrades.id,
+          investorId: exchangeTrades.investorId,
+          status: exchangeTrades.status,
+          onboardingStatus: exchangeTrades.onboardingStatus,
+          jaceSessionId: exchangeTrades.jaceSessionId,
+        })
+        .from(exchangeTrades)
+        .where(and(eq(exchangeTrades.id, tradeId), eq(exchangeTrades.investorId, req.user?.id || 0)));
+
+      if (!trade) return res.status(404).json({ error: "Trade not found" });
+      if (trade.onboardingStatus !== "COMPLETED") {
+        return res.status(409).json({ error: "Onboarding must be completed before payment" });
+      }
+      if (trade.jaceSessionId !== sessionId) {
+        return res.status(400).json({ error: "Session does not match trade" });
+      }
+
+      const paymentReference = `mock_pay_${crypto.randomUUID()}`;
+
+      // This mimics a JACE webhook payload. No signature required because this is an internal test path.
+      const event = {
+        eventId: `mock_evt_${crypto.randomUUID()}`,
+        eventType: "payment.confirmed",
+        correlationId: `mock_corr_${crypto.randomUUID()}`,
+        data: {
+          mode: "MOCK",
+          tradeId,
+          sessionId,
+          paymentReference,
+        },
+      };
+
+      await ingestJaceWebhook(Buffer.from(JSON.stringify(event), "utf-8"));
+
+      res.json({ ok: true, tradeId, sessionId, paymentReference, eventId: event.eventId, correlationId: event.correlationId });
+    } catch (error: any) {
+      console.error("Mock JACE completion error:", error);
+      res.status(500).json({ error: "Failed to complete mock checkout", details: error?.message || String(error) });
+    }
+  });
+
   // POST /api/investor/trades/:id/checkout - Create Stripe checkout for bond purchase
   app.post("/api/investor/trades/:id/checkout", investorAuthMiddleware, async (req: AuthRequest, res) => {
     try {
@@ -3687,6 +3796,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Get PIN logs error:", error);
       res.status(500).json({ error: "Failed to get PIN logs" });
+    }
+  });
+
+  // ===== JACE WEBHOOK ENDPOINT =====
+  // JACE sends back investor onboarding and payment confirmation events.
+  // Signature: X-JACE-Signature = HMAC_SHA256_HEX(JACE_WEBHOOK_SECRET, rawBody)
+  app.post("/api/jace/webhook", async (req, res) => {
+    try {
+      const rawBody: Buffer = (req as any).rawBody
+        ? Buffer.isBuffer((req as any).rawBody)
+          ? (req as any).rawBody
+          : Buffer.from((req as any).rawBody)
+        : Buffer.from(JSON.stringify(req.body || {}));
+      const sig = (req.header("x-jace-signature") || req.header("X-JACE-Signature") || "").trim();
+      const v = verifyJaceSignature(rawBody, sig);
+      if (!v.ok) {
+        return res.status(401).json({ error: "Invalid signature", reason: v.reason });
+      }
+      await ingestJaceWebhook(rawBody);
+      res.json({ ok: true });
+    } catch (error: any) {
+      console.error("JACE webhook error:", error);
+      res.status(500).json({ error: "Webhook processing failed", details: error?.message || String(error) });
     }
   });
 

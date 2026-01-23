@@ -29,7 +29,11 @@ export type ImmutableEventType =
   | "USER_REGISTERED"
   | "USER_LOGIN"
   | "MEMBERSHIP_SUBSCRIBED"
-  | "MEMBERSHIP_CANCELLED";
+  | "MEMBERSHIP_CANCELLED"
+  | "JACE_WEBHOOK_RECEIVED"
+  | "JACE_PAYMENT_CONFIRMED"
+  | "JACE_INVESTOR_ONBOARDED"
+  | "JACE_ONBOARDING_SUBMITTED";
 
 export interface ImmutableEventData {
   type: ImmutableEventType;

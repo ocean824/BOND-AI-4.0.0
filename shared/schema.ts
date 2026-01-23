@@ -14,6 +14,10 @@ export const users = pgTable("users", {
   stripeSubscriptionId: varchar("stripe_subscription_id", { length: 255 }),
   subscriptionStatus: varchar("subscription_status", { length: 50 }).default("none"),
   subscriptionTier: varchar("subscription_tier", { length: 50 }),
+  // Invite code system
+  inviteCodeUsed: varchar("invite_code_used", { length: 32 }),
+  inviteCodeAcceptedAt: timestamp("invite_code_accepted_at", { withTimezone: true }),
+  termsAcceptedAt: timestamp("terms_accepted_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
@@ -321,6 +325,13 @@ export const exchangeTrades = pgTable("exchange_trades", {
   stripeCheckoutSessionId: varchar("stripe_checkout_session_id", { length: 255 }),
   stripePaymentIntentId: varchar("stripe_payment_intent_id", { length: 255 }),
   settlementId: varchar("settlement_id", { length: 255 }),
+  // Jace integration fields
+  onboardingStatus: varchar("onboarding_status", { length: 20 }).default("PENDING"),
+  onboardingCompletedAt: timestamp("onboarding_completed_at", { withTimezone: true }),
+  jaceSessionId: varchar("jace_session_id", { length: 255 }),
+  jaceSessionStatus: varchar("jace_session_status", { length: 20 }),
+  jacePaymentReference: varchar("jace_payment_reference", { length: 255 }),
+  jacePaidAt: timestamp("jace_paid_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
@@ -433,6 +444,18 @@ export const immutableEvents = pgTable("immutable_events", {
 export const stripeWebhooks = pgTable("stripe_webhooks", {
   id: serial("id").primaryKey(),
   stripeEventId: varchar("stripe_event_id", { length: 255 }).notNull().unique(),
+  eventType: varchar("event_type", { length: 100 }).notNull(),
+  payload: jsonb("payload").notNull(),
+  status: varchar("status", { length: 20 }).notNull().default("RECEIVED"), // RECEIVED | PROCESSED | FAILED
+  processedAt: timestamp("processed_at", { withTimezone: true }),
+  errorMessage: text("error_message"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+// ===== JACE WEBHOOKS TABLE =====
+export const jaceWebhooks = pgTable("jace_webhooks", {
+  id: serial("id").primaryKey(),
+  jaceEventId: varchar("jace_event_id", { length: 255 }).notNull().unique(),
   eventType: varchar("event_type", { length: 100 }).notNull(),
   payload: jsonb("payload").notNull(),
   status: varchar("status", { length: 20 }).notNull().default("RECEIVED"), // RECEIVED | PROCESSED | FAILED
