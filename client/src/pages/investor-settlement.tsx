@@ -3,9 +3,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
-import { CheckCircle, Clock, AlertCircle, Download, FileText } from "lucide-react";
+import { CheckCircle, Clock, AlertCircle, Download, FileText, ChevronLeft } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { useLocation } from "wouter";
 
 interface Settlement {
   id: number;
@@ -28,6 +29,7 @@ export default function InvestorSettlementPage() {
   const [settlements, setSettlements] = useState<Settlement[]>([]);
   const [loading, setLoading] = useState(true);
   const { toast } = useToast();
+  const [, setLocation] = useLocation();
 
   useEffect(() => {
     loadSettlements();
@@ -119,6 +121,16 @@ export default function InvestorSettlementPage() {
 
   return (
     <div className="container mx-auto p-6 space-y-6">
+      {/* Back Navigation */}
+      <Button
+        variant="ghost"
+        onClick={() => setLocation("/exchange/overview")}
+        className="mb-4"
+      >
+        <ChevronLeft className="w-4 h-4" />
+        Back to Exchange Overview
+      </Button>
+
       <div>
         <h1 className="text-3xl font-bold">Settlement History</h1>
         <p className="text-muted-foreground mt-2">

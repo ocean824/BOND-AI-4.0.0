@@ -1936,12 +1936,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
 
+      // Check if user is in demo mode
+      const [settings] = await db
+        .select()
+        .from(userSettings)
+        .where(eq(userSettings.userId, investorId))
+        .limit(1);
+
+      const isDemo = settings?.demoMode || false;
+
       const [bid] = await db
         .insert(auctionBids)
         .values({
           auctionId: auction.id,
           investorId,
           amount: amount.toString(),
+          isDemo,
         })
         .returning();
 
@@ -3378,6 +3388,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // GET /api/investor/bids-won - Get winning bids
   app.get("/api/investor/bids-won", investorAuthMiddleware, async (req: AuthRequest, res) => {
     try {
+      // Get user's demo mode setting
+      const [settings] = await db
+        .select()
+        .from(userSettings)
+        .where(eq(userSettings.userId, req.user!.id))
+        .limit(1);
+
+      const demoMode = settings?.demoMode || false;
+
       const winningBids = await db
         .select({
           id: auctionBids.id,
@@ -3402,7 +3421,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .where(
           and(
             eq(auctionBids.investorId, req.user!.id),
-            eq(auctions.winningBidId, auctionBids.id)
+            eq(auctions.winningBidId, auctionBids.id),
+            // Filter by demo mode: if demo mode ON, show all; if OFF, show only real bids
+            demoMode ? undefined : eq(auctionBids.isDemo, false)
           )
         )
         .orderBy(desc(auctionBids.placedAt));
@@ -3464,6 +3485,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // GET /api/investor/settlements - Get settlement history
   app.get("/api/investor/settlements", investorAuthMiddleware, async (req: AuthRequest, res) => {
     try {
+      // Get user's demo mode setting
+      const [settings] = await db
+        .select()
+        .from(userSettings)
+        .where(eq(userSettings.userId, req.user!.id))
+        .limit(1);
+
+      const demoMode = settings?.demoMode || false;
+
       const settlements = await db
         .select({
           id: exchangeSettlements.id,
@@ -3480,7 +3510,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .from(exchangeSettlements)
         .innerJoin(exchangeTrades, eq(exchangeSettlements.tradeId, exchangeTrades.id))
         .innerJoin(bonds, eq(exchangeTrades.bondId, bonds.id))
-        .where(eq(exchangeTrades.investorId, req.user!.id))
+        .where(
+          and(
+            eq(exchangeTrades.investorId, req.user!.id),
+            // Filter by demo mode: if demo mode ON, show all; if OFF, show only real settlements
+            demoMode ? undefined : eq(exchangeSettlements.isDemo, false)
+          )
+        )
         .orderBy(desc(exchangeSettlements.createdAt));
 
       res.json({ settlements });

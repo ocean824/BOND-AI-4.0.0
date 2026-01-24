@@ -3,7 +3,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
-import { Trophy, Clock, CheckCircle, CreditCard, ArrowRight } from "lucide-react";
+import { Trophy, Clock, CheckCircle, CreditCard, ArrowRight, ChevronLeft } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useLocation } from "wouter";
@@ -81,7 +81,10 @@ export default function InvestorBidsWonPage() {
     return (
       <div className="container mx-auto p-6">
         <div className="flex items-center justify-center h-64">
-          <div className="text-muted-foreground">Loading winning bids...</div>
+          <div className="text-center">
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto mb-4"></div>
+            <p className="text-muted-foreground">Loading winning bids...</p>
+          </div>
         </div>
       </div>
     );
@@ -89,6 +92,16 @@ export default function InvestorBidsWonPage() {
 
   return (
     <div className="container mx-auto p-6 space-y-6">
+      {/* Back Navigation */}
+      <Button
+        variant="ghost"
+        onClick={() => setLocation("/exchange/overview")}
+        className="mb-4"
+      >
+        <ChevronLeft className="w-4 h-4" />
+        Back to Exchange Overview
+      </Button>
+
       <div>
         <h1 className="text-3xl font-bold flex items-center gap-3">
           <Trophy className="w-8 h-8 text-yellow-600" />

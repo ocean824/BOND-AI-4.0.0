@@ -55,6 +55,7 @@ export async function createTradeFromAuction(auctionId: number): Promise<TradeRe
       auctionId: auctionBids.auctionId,
       investorId: auctionBids.investorId,
       amount: auctionBids.amount,
+      isDemo: auctionBids.isDemo,
     })
     .from(auctionBids)
     .where(eq(auctionBids.id, auction.winningBidId));
@@ -101,6 +102,7 @@ export async function createTradeFromAuction(auctionId: number): Promise<TradeRe
       stripeCheckoutSessionId: null,
       stripePaymentIntentId: null,
       settlementId: null,
+      isDemo: winningBid.isDemo || false,
     })
     .returning();
 
@@ -282,6 +284,7 @@ export async function createSettlement(
       settlementMethod: "STRIPE",
       status: "COMPLETED",
       settledAt: new Date(),
+      isDemo: trade.isDemo || false,
       metadata: {
         investorEmail,
         investorName,

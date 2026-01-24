@@ -4,9 +4,10 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { FileText, Download, Search, Filter } from "lucide-react";
+import { FileText, Download, Search, Filter, ChevronLeft } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { useLocation } from "wouter";
 
 interface Document {
   id: number;
@@ -26,6 +27,7 @@ export default function InvestorDocumentsPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("all");
   const { toast } = useToast();
+  const [, setLocation] = useLocation();
 
   useEffect(() => {
     loadDocuments();
@@ -129,6 +131,16 @@ export default function InvestorDocumentsPage() {
 
   return (
     <div className="container mx-auto p-6 space-y-6">
+      {/* Back Navigation */}
+      <Button
+        variant="ghost"
+        onClick={() => setLocation("/exchange/overview")}
+        className="mb-4"
+      >
+        <ChevronLeft className="w-4 h-4" />
+        Back to Exchange Overview
+      </Button>
+
       <div>
         <h1 className="text-3xl font-bold">My Documents</h1>
         <p className="text-muted-foreground mt-2">
