@@ -125,6 +125,9 @@ export const bonds = pgTable("bonds", {
   draftDocument: text("draft_document"),
   draftUpdatedAt: timestamp("draft_updated_at", { withTimezone: true }),
   
+  // Demo tracking
+  isDemo: boolean("is_demo").default(false),
+  
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
@@ -138,6 +141,7 @@ export const auctions = pgTable("auctions", {
   endsAt: timestamp("ends_at", { withTimezone: true }).notNull(),
   reservePrice: decimal("reserve_price", { precision: 18, scale: 2 }).notNull(),
   winningBidId: integer("winning_bid_id"),
+  isDemo: boolean("is_demo").default(false),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
@@ -147,6 +151,7 @@ export const auctionBids = pgTable("auction_bids", {
   auctionId: integer("auction_id").notNull().references(() => auctions.id, { onDelete: "cascade" }),
   investorId: integer("investor_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   amount: decimal("amount", { precision: 18, scale: 2 }).notNull(),
+  isDemo: boolean("is_demo").default(false),
   placedAt: timestamp("placed_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
@@ -340,6 +345,7 @@ export const exchangeTrades = pgTable("exchange_trades", {
   jaceSessionStatus: varchar("jace_session_status", { length: 20 }),
   jacePaymentReference: varchar("jace_payment_reference", { length: 255 }),
   jacePaidAt: timestamp("jace_paid_at", { withTimezone: true }),
+  isDemo: boolean("is_demo").default(false),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
@@ -353,6 +359,7 @@ export const exchangeSettlements = pgTable("exchange_settlements", {
   status: varchar("status", { length: 20 }).notNull().default("PENDING"), // PENDING | COMPLETED | FAILED
   settledAt: timestamp("settled_at", { withTimezone: true }),
   metadata: jsonb("metadata").default({}),
+  isDemo: boolean("is_demo").default(false),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
@@ -1222,3 +1229,72 @@ export type InvestorMetrics = {
     equity: { count: number; faceValue: number; recommendedPurchase: number };
   };
 };
+
+
+// User settings for demo mode and tour tracking
+export const userSettings = pgTable("user_settings", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull().unique().references(() => users.id, { onDelete: "cascade" }),
+  demoMode: boolean("demo_mode").notNull().default(false),
+  tourCompleted: boolean("tour_completed").notNull().default(false),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+// Investor document vault - private documents per investor
+export const investorDocuments = pgTable("investor_documents", {
+  id: serial("id").primaryKey(),
+  investorId: integer("investor_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  tradeId: integer("trade_id").references(() => exchangeTrades.id, { onDelete: "set null" }),
+  bondId: integer("bond_id").references(() => bonds.id, { onDelete: "set null" }),
+  documentType: varchar("document_type", { length: 50 }).notNull(), // settlement_receipt, prospectus, term_sheet, legal_opinion
+  filename: varchar("filename", { length: 500 }).notNull(),
+  mimeType: varchar("mime_type", { length: 100 }).notNull(),
+  sizeBytes: integer("size_bytes").notNull(),
+  storagePath: varchar("storage_path", { length: 1000 }).notNull(),
+  metadata: jsonb("metadata").default({}),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+// Support messages for investor-admin communication
+export const supportMessages = pgTable("support_messages", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  category: varchar("category", { length: 50 }).notNull().default("general"), // general, technical, billing, compliance
+  subject: varchar("subject", { length: 255 }).notNull(),
+  message: text("message").notNull(),
+  status: varchar("status", { length: 20 }).notNull().default("open"), // open, responded, closed
+  adminResponse: text("admin_response"),
+  respondedAt: timestamp("responded_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+// Relations for new tables
+export const userSettingsRelations = relations(userSettings, ({ one }) => ({
+  user: one(users, {
+    fields: [userSettings.userId],
+    references: [users.id],
+  }),
+}));
+
+export const investorDocumentsRelations = relations(investorDocuments, ({ one }) => ({
+  investor: one(users, {
+    fields: [investorDocuments.investorId],
+    references: [users.id],
+  }),
+  trade: one(exchangeTrades, {
+    fields: [investorDocuments.tradeId],
+    references: [exchangeTrades.id],
+  }),
+  bond: one(bonds, {
+    fields: [investorDocuments.bondId],
+    references: [bonds.id],
+  }),
+}));
+
+export const supportMessagesRelations = relations(supportMessages, ({ one }) => ({
+  user: one(users, {
+    fields: [supportMessages.userId],
+    references: [users.id],
+  }),
+}));
