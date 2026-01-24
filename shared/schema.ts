@@ -14,6 +14,9 @@ export const users = pgTable("users", {
   stripeSubscriptionId: varchar("stripe_subscription_id", { length: 255 }),
   subscriptionStatus: varchar("subscription_status", { length: 50 }).default("none"),
   subscriptionTier: varchar("subscription_tier", { length: 50 }),
+  // PIN system for admin/compliance access
+  hasPin: boolean("has_pin").default(false),
+  pinRole: varchar("pin_role", { length: 50 }),
   // Invite code system
   inviteCodeUsed: varchar("invite_code_used", { length: 32 }),
   inviteCodeAcceptedAt: timestamp("invite_code_accepted_at", { withTimezone: true }),
