@@ -39,14 +39,14 @@ CREATE TABLE IF NOT EXISTS investor_documents (
 -- Add is_demo columns to track demo vs real data
 ALTER TABLE bonds ADD COLUMN IF NOT EXISTS is_demo BOOLEAN DEFAULT FALSE;
 ALTER TABLE auctions ADD COLUMN IF NOT EXISTS is_demo BOOLEAN DEFAULT FALSE;
-ALTER TABLE bids ADD COLUMN IF NOT EXISTS is_demo BOOLEAN DEFAULT FALSE;
+ALTER TABLE auction_bids ADD COLUMN IF NOT EXISTS is_demo BOOLEAN DEFAULT FALSE;
 ALTER TABLE exchange_trades ADD COLUMN IF NOT EXISTS is_demo BOOLEAN DEFAULT FALSE;
 ALTER TABLE exchange_settlements ADD COLUMN IF NOT EXISTS is_demo BOOLEAN DEFAULT FALSE;
 
 -- Add indexes for is_demo filtering
 ALTER TABLE bonds ADD INDEX IF NOT EXISTS idx_bonds_is_demo (is_demo);
 ALTER TABLE auctions ADD INDEX IF NOT EXISTS idx_auctions_is_demo (is_demo);
-ALTER TABLE bids ADD INDEX IF NOT EXISTS idx_bids_is_demo (is_demo);
+ALTER TABLE auction_bids ADD INDEX IF NOT EXISTS idx_auction_bids_is_demo (is_demo);
 ALTER TABLE exchange_trades ADD INDEX IF NOT EXISTS idx_trades_is_demo (is_demo);
 ALTER TABLE exchange_settlements ADD INDEX IF NOT EXISTS idx_settlements_is_demo (is_demo);
 
