@@ -1,4 +1,4 @@
-import { Home, FileText, Package, Coins, TrendingUp, Shield, Gavel, History, BarChart3, LogOut, Scale, Briefcase } from "lucide-react";
+import { Home, FileText, Package, Coins, TrendingUp, Shield, Gavel, History, BarChart3, LogOut, Scale, Briefcase, Trophy, Receipt } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import {
   Sidebar,
@@ -37,6 +37,9 @@ const exchangeMenuItems: MenuItem[] = [
   { title: "Active Auctions", url: "/exchange/auctions", icon: Gavel, testId: "nav-exchange-auctions", roles: ["admin", "investor"] },
   { title: "My Bids", url: "/exchange/my-bids", icon: History, testId: "nav-exchange-my-bids", roles: ["admin", "investor"] },
   { title: "My Holdings", url: "/exchange/holdings", icon: Briefcase, testId: "nav-exchange-holdings", roles: ["admin", "investor"] },
+  { title: "Bids Won", url: "/exchange/bids-won", icon: Trophy, testId: "nav-exchange-bids-won", roles: ["admin", "investor"] },
+  { title: "Settlement", url: "/exchange/settlement", icon: Receipt, testId: "nav-exchange-settlement", roles: ["admin", "investor"] },
+  { title: "Documents", url: "/exchange/documents", icon: FileText, testId: "nav-exchange-documents", roles: ["admin", "investor"] },
 ];
 
 export function AppSidebar() {
@@ -109,6 +112,20 @@ export function AppSidebar() {
             </p>
           </div>
         </div>
+        {userRole === "investor" && (
+          <Button
+            variant="outline"
+            className="w-full justify-start mb-2"
+            onClick={() => {
+              const event = new CustomEvent('startInvestorTour');
+              window.dispatchEvent(event);
+            }}
+            data-testid="button-start-tour"
+          >
+            <BarChart3 className="w-4 h-4 mr-2" />
+            Start Tour
+          </Button>
+        )}
         <Button
           variant="ghost"
           className="w-full justify-start"

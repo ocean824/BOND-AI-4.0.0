@@ -38,7 +38,7 @@ import { InviteCodeService } from "./services/inviteCodeService";
 import { PinService } from "./services/pinService";
 import { userDetailsPinMiddleware } from "./middleware/pinAuth";
 import { ingestJaceWebhook, sendInvestorOnboardingToJace, verifyJaceSignature } from "./services/jaceIntegrationService";
-import { auctions, auctionBids, suretyTrusts, suretyCases, suretyCollateral, bondProcessDocuments, bonds, immutableEvents, pinAccessLogs, exchangeTrades } from "@shared/schema";
+import { auctions, auctionBids, suretyTrusts, suretyCases, suretyCollateral, bondProcessDocuments, bonds, immutableEvents, pinAccessLogs, exchangeTrades, exchangeSettlements, userSettings, investorDocuments, supportMessages } from "@shared/schema";
 import { eq, desc, and, lt, gt } from "drizzle-orm";
 import bcrypt from "bcryptjs";
 import { z } from "zod";
@@ -3077,6 +3077,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ error: "Access denied" });
       }
 
+      // Check demo mode enforcement
+      const [settings] = await db
+        .select()
+        .from(userSettings)
+        .where(eq(userSettings.userId, req.user!.id))
+        .limit(1);
+
+      // If demo mode is OFF, can only settle demo trades
+      // If demo mode is ON, can settle any trade (demo or real)
+      if (!settings?.demoMode && !trade.isDemo) {
+        return res.status(403).json({ 
+          error: "Demo mode must be enabled to settle real trades. This is a demo settlement feature." 
+        });
+      }
+
       // Update trade to PAID
       await import("./services/tradeService").then(m => 
         m.updateTradeStatus(tradeId, "PAID", { paymentIntentId: `manual-${Date.now()}` })
@@ -3357,6 +3372,230 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Get holdings error:", error);
       res.status(500).json({ error: "Failed to get holdings" });
+    }
+  });
+
+  // GET /api/investor/bids-won - Get winning bids
+  app.get("/api/investor/bids-won", investorAuthMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const winningBids = await db
+        .select({
+          id: auctionBids.id,
+          auctionId: auctionBids.auctionId,
+          amount: auctionBids.amount,
+          placedAt: auctionBids.placedAt,
+          isDemo: auctionBids.isDemo,
+          bondId: bonds.id,
+          bondName: bonds.name,
+          faceValue: bonds.faceValue,
+          couponRate: bonds.couponRate,
+          maturityDate: bonds.maturityDate,
+          issuer: bonds.name,
+          auctionStatus: auctions.status,
+          tradeId: exchangeTrades.id,
+          tradeStatus: exchangeTrades.status,
+        })
+        .from(auctionBids)
+        .innerJoin(auctions, eq(auctionBids.auctionId, auctions.id))
+        .innerJoin(bonds, eq(auctions.bondId, bonds.id))
+        .leftJoin(exchangeTrades, eq(exchangeTrades.auctionId, auctions.id))
+        .where(
+          and(
+            eq(auctionBids.investorId, req.user!.id),
+            eq(auctions.winningBidId, auctionBids.id)
+          )
+        )
+        .orderBy(desc(auctionBids.placedAt));
+
+      res.json({ bids: winningBids });
+    } catch (error) {
+      console.error("Get bids won error:", error);
+      res.status(500).json({ error: "Failed to get winning bids" });
+    }
+  });
+
+  // GET /api/investor/documents - Get accessible documents
+  app.get("/api/investor/documents", investorAuthMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const documents = await db
+        .select()
+        .from(investorDocuments)
+        .where(eq(investorDocuments.investorId, req.user!.id))
+        .orderBy(desc(investorDocuments.createdAt));
+
+      res.json({ documents });
+    } catch (error) {
+      console.error("Get documents error:", error);
+      res.status(500).json({ error: "Failed to get documents" });
+    }
+  });
+
+  // GET /api/investor/documents/:id/download - Download document
+  app.get("/api/investor/documents/:id/download", investorAuthMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const documentId = parseInt(req.params.id);
+      if (isNaN(documentId)) {
+        return res.status(400).json({ error: "Invalid document ID" });
+      }
+
+      const [document] = await db
+        .select()
+        .from(investorDocuments)
+        .where(
+          and(
+            eq(investorDocuments.id, documentId),
+            eq(investorDocuments.investorId, req.user!.id)
+          )
+        )
+        .limit(1);
+
+      if (!document) {
+        return res.status(404).json({ error: "Document not found" });
+      }
+
+      // Send file
+      res.download(document.storagePath, document.filename);
+    } catch (error) {
+      console.error("Download document error:", error);
+      res.status(500).json({ error: "Failed to download document" });
+    }
+  });
+
+  // GET /api/investor/settlements - Get settlement history
+  app.get("/api/investor/settlements", investorAuthMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const settlements = await db
+        .select({
+          id: exchangeSettlements.id,
+          tradeId: exchangeSettlements.tradeId,
+          settlementAmount: exchangeSettlements.settlementAmount,
+          settlementMethod: exchangeSettlements.settlementMethod,
+          status: exchangeSettlements.status,
+          settledAt: exchangeSettlements.settledAt,
+          isDemo: exchangeSettlements.isDemo,
+          createdAt: exchangeSettlements.createdAt,
+          bondName: bonds.name,
+          bondId: bonds.id,
+        })
+        .from(exchangeSettlements)
+        .innerJoin(exchangeTrades, eq(exchangeSettlements.tradeId, exchangeTrades.id))
+        .innerJoin(bonds, eq(exchangeTrades.bondId, bonds.id))
+        .where(eq(exchangeTrades.investorId, req.user!.id))
+        .orderBy(desc(exchangeSettlements.createdAt));
+
+      res.json({ settlements });
+    } catch (error) {
+      console.error("Get settlements error:", error);
+      res.status(500).json({ error: "Failed to get settlements" });
+    }
+  });
+
+  // GET /api/investor/demo-mode - Get demo mode status
+  app.get("/api/investor/demo-mode", investorAuthMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const [settings] = await db
+        .select()
+        .from(userSettings)
+        .where(eq(userSettings.userId, req.user!.id))
+        .limit(1);
+
+      if (!settings) {
+        // Create default settings
+        const [newSettings] = await db
+          .insert(userSettings)
+          .values({ userId: req.user!.id, demoMode: false, tourCompleted: false })
+          .returning();
+        return res.json({ demoMode: newSettings.demoMode, tourCompleted: newSettings.tourCompleted });
+      }
+
+      res.json({ demoMode: settings.demoMode, tourCompleted: settings.tourCompleted });
+    } catch (error) {
+      console.error("Get demo mode error:", error);
+      res.status(500).json({ error: "Failed to get demo mode status" });
+    }
+  });
+
+  // POST /api/investor/demo-mode - Toggle demo mode
+  app.post("/api/investor/demo-mode", investorAuthMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const { demoMode } = req.body;
+      if (typeof demoMode !== "boolean") {
+        return res.status(400).json({ error: "demoMode must be a boolean" });
+      }
+
+      const [settings] = await db
+        .insert(userSettings)
+        .values({ userId: req.user!.id, demoMode })
+        .onConflictDoUpdate({
+          target: userSettings.userId,
+          set: { demoMode, updatedAt: new Date() },
+        })
+        .returning();
+
+      res.json({ demoMode: settings.demoMode, tourCompleted: settings.tourCompleted });
+    } catch (error) {
+      console.error("Toggle demo mode error:", error);
+      res.status(500).json({ error: "Failed to toggle demo mode" });
+    }
+  });
+
+  // POST /api/investor/settings/tour-completed - Mark tour as completed
+  app.post("/api/investor/settings/tour-completed", investorAuthMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const [settings] = await db
+        .insert(userSettings)
+        .values({ userId: req.user!.id, tourCompleted: true })
+        .onConflictDoUpdate({
+          target: userSettings.userId,
+          set: { tourCompleted: true, updatedAt: new Date() },
+        })
+        .returning();
+
+      res.json({ tourCompleted: settings.tourCompleted });
+    } catch (error) {
+      console.error("Mark tour completed error:", error);
+      res.status(500).json({ error: "Failed to mark tour as completed" });
+    }
+  });
+
+  // POST /api/investor/support/messages - Submit support request
+  app.post("/api/investor/support/messages", investorAuthMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const { category, subject, message } = req.body;
+      if (!subject || !message) {
+        return res.status(400).json({ error: "Subject and message are required" });
+      }
+
+      const [supportMessage] = await db
+        .insert(supportMessages)
+        .values({
+          userId: req.user!.id,
+          category: category || "general",
+          subject,
+          message,
+        })
+        .returning();
+
+      res.json({ message: supportMessage });
+    } catch (error) {
+      console.error("Submit support message error:", error);
+      res.status(500).json({ error: "Failed to submit support message" });
+    }
+  });
+
+  // GET /api/investor/support/messages - Get own support messages
+  app.get("/api/investor/support/messages", investorAuthMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const messages = await db
+        .select()
+        .from(supportMessages)
+        .where(eq(supportMessages.userId, req.user!.id))
+        .orderBy(desc(supportMessages.createdAt));
+
+      res.json({ messages });
+    } catch (error) {
+      console.error("Get support messages error:", error);
+      res.status(500).json({ error: "Failed to get support messages" });
     }
   });
 
@@ -3796,6 +4035,121 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Get PIN logs error:", error);
       res.status(500).json({ error: "Failed to get PIN logs" });
+    }
+  });
+
+  // GET /api/admin/support/messages - Get all support messages (admin only)
+  app.get("/api/admin/support/messages", adminAuthMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const messages = await db
+        .select({
+          id: supportMessages.id,
+          userId: supportMessages.userId,
+          category: supportMessages.category,
+          subject: supportMessages.subject,
+          message: supportMessages.message,
+          status: supportMessages.status,
+          adminResponse: supportMessages.adminResponse,
+          respondedBy: supportMessages.respondedBy,
+          respondedAt: supportMessages.respondedAt,
+          createdAt: supportMessages.createdAt,
+          username: users.username,
+          email: users.email,
+        })
+        .from(supportMessages)
+        .leftJoin(users, eq(supportMessages.userId, users.id))
+        .orderBy(desc(supportMessages.createdAt));
+
+      res.json({ messages });
+    } catch (error) {
+      console.error("Get admin support messages error:", error);
+      res.status(500).json({ error: "Failed to get support messages" });
+    }
+  });
+
+  // POST /api/admin/support/messages/:id/respond - Respond to support message
+  app.post("/api/admin/support/messages/:id/respond", adminAuthMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const messageId = parseInt(req.params.id);
+      if (isNaN(messageId)) {
+        return res.status(400).json({ error: "Invalid message ID" });
+      }
+
+      const { response } = req.body;
+      if (!response) {
+        return res.status(400).json({ error: "Response is required" });
+      }
+
+      const [updated] = await db
+        .update(supportMessages)
+        .set({
+          adminResponse: response,
+          respondedBy: req.user!.id,
+          respondedAt: new Date(),
+          status: "resolved",
+        })
+        .where(eq(supportMessages.id, messageId))
+        .returning();
+
+      if (!updated) {
+        return res.status(404).json({ error: "Message not found" });
+      }
+
+      res.json({ message: updated });
+    } catch (error) {
+      console.error("Respond to support message error:", error);
+      res.status(500).json({ error: "Failed to respond to support message" });
+    }
+  });
+
+  // GET /api/admin/documents - Get all investor documents (admin only)
+  app.get("/api/admin/documents", adminAuthMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const documents = await db
+        .select({
+          id: investorDocuments.id,
+          investorId: investorDocuments.investorId,
+          filename: investorDocuments.filename,
+          documentType: investorDocuments.documentType,
+          storagePath: investorDocuments.storagePath,
+          createdAt: investorDocuments.createdAt,
+          username: users.username,
+          email: users.email,
+        })
+        .from(investorDocuments)
+        .leftJoin(users, eq(investorDocuments.investorId, users.id))
+        .orderBy(desc(investorDocuments.createdAt));
+
+      res.json({ documents });
+    } catch (error) {
+      console.error("Get admin documents error:", error);
+      res.status(500).json({ error: "Failed to get documents" });
+    }
+  });
+
+  // GET /api/admin/documents/:id/download - Download any document (admin only)
+  app.get("/api/admin/documents/:id/download", adminAuthMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const documentId = parseInt(req.params.id);
+      if (isNaN(documentId)) {
+        return res.status(400).json({ error: "Invalid document ID" });
+      }
+
+      const [document] = await db
+        .select()
+        .from(investorDocuments)
+        .where(eq(investorDocuments.id, documentId))
+        .limit(1);
+
+      if (!document) {
+        return res.status(404).json({ error: "Document not found" });
+      }
+
+      // Send file
+      res.download(document.storagePath, document.filename);
+    } catch (error) {
+      console.error("Download admin document error:", error);
+      res.status(500).json({ error: "Failed to download document" });
     }
   });
 
